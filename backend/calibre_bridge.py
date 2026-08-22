@@ -761,7 +761,7 @@ class CalibreBridge:
                     rating = float(content)
                 except ValueError:
                     continue
-                result["rating"] = rating / 2 if rating > 5 else rating
+                result["rating"] = rating / 2
 
         if not result:
             raise BridgeError("metadata_no_result", "Calibre returned no usable metadata result", retryable=True)

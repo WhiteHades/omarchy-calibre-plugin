@@ -171,6 +171,18 @@ class MetadataDownloadTest(unittest.TestCase):
         self.assertIn("9780000000001", command)
         self.assertIn("asin:old", command)
 
+    def test_opf_ratings_always_convert_from_calibres_ten_point_scale(self) -> None:
+        parsed = CalibreBridge.parse_metadata_opf(
+            """<?xml version="1.0" encoding="utf-8"?>
+            <package xmlns="http://www.idpf.org/2007/opf">
+              <metadata>
+                <meta name="calibre:rating" content="4" />
+              </metadata>
+            </package>"""
+        )
+
+        self.assertEqual(parsed["rating"], 2.0)
+
     def test_apply_uses_only_selected_fields_and_cleans_preview(self) -> None:
         self.use_tools()
         preview = self.bridge.fetch_metadata("library-token", self.root, {"bookId": 1})
