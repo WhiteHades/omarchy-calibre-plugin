@@ -3,15 +3,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import secrets
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+try:
+    from .bridge_server import DuplicateRequest, OperationContext, OperationScheduler, SchedulerClosed
+except ImportError:  # pragma: no cover - used when the bridge runs as a script
+    from bridge_server import DuplicateRequest, OperationContext, OperationScheduler, SchedulerClosed
 
 try:
     from .device_adapter import DeviceAdapter, DeviceError
@@ -63,6 +71,13 @@ DEVICE_ACTIONS = {
     "device.eject",
     "device.send",
 }
+LIBRARY_MUTATIONS = {
+    "book.metadata.update",
+    "book.cover.set",
+    "books.import",
+    "format.add",
+    "book.convert.quick",
+}
 
 
 class BridgeError(Exception):
@@ -85,40 +100,138 @@ class CalibreBridge:
         self.libraries: dict[str, Path] = {}
         self.confirmations: dict[str, dict[str, Any]] = {}
         self._conversion_capabilities: dict[str, Any] | None = None
-        self.device_adapter = device_adapter if device_adapter is not None else DeviceAdapter()
+        self._state_lock = threading.RLock()
+        self._operation_local = threading.local()
+        self.device_adapter = device_adapter if device_adapter is not None else DeviceAdapter(
+            runner=self.run_device_command
+        )
 
-    def handle(self, request: dict[str, Any]) -> list[dict[str, Any]]:
+    def run_device_command(
+        self,
+        command: list[str],
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.run(command, timeout=timeout, check=False)
+
+    @staticmethod
+    def validate_request(request: dict[str, Any]) -> None:
+        if not isinstance(request, dict):
+            raise BridgeError("invalid_request", "Request must be a JSON object")
         request_id = request.get("id")
         if not isinstance(request_id, str) or not request_id:
             raise BridgeError("invalid_request", "Request id must be a non-empty string")
         if request.get("protocol") != PROTOCOL_VERSION:
             raise BridgeError("invalid_request", "Unsupported bridge protocol")
 
+    @staticmethod
+    def canonical_export_destination(value: Any) -> Path | None:
+        if not isinstance(value, (str, Path)) or not str(value):
+            return None
+        try:
+            return Path(value).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return None
+
+    @classmethod
+    def export_scheduling_key(cls, value: Any) -> tuple[str, str] | None:
+        destination = cls.canonical_export_destination(value)
+        if destination is None:
+            return None
+        return ("export", str(destination))
+
+    def scheduling_key(self, request: dict[str, Any]) -> tuple[str, str] | None:
+        operation = request.get("operation")
+        input_data = request.get("input", {})
+        action = input_data.get("name") if isinstance(input_data, dict) else None
+        if operation in DEVICE_ACTIONS or action in DEVICE_ACTIONS:
+            return ("device", "calibre")
+        if operation == "bootstrap":
+            return ("bootstrap", "calibre")
+        if operation in {"action.commit", "action.discard"} and isinstance(input_data, dict):
+            token = input_data.get("confirmationToken")
+            with self._state_lock:
+                plan = self.confirmations.get(token) if isinstance(token, str) else None
+            if operation == "action.commit" and isinstance(plan, dict) and plan.get("name") == "book.export.replace":
+                export_key = self.export_scheduling_key(plan.get("destination"))
+                if export_key is not None:
+                    return export_key
+            library_token = plan.get("libraryToken") if isinstance(plan, dict) else None
+            if isinstance(library_token, str) and library_token:
+                return ("library", library_token)
+        if operation in {"action.run", "action.prepare"} and action in {"book.export", "book.export.replace"}:
+            export_key = self.export_scheduling_key(input_data.get("destination"))
+            if export_key is not None:
+                return export_key
+        if operation != "action.run" or action not in LIBRARY_MUTATIONS:
+            return None
+        library_token = request.get("library")
+        if isinstance(library_token, str) and library_token:
+            return ("library", library_token)
+        return None
+
+    def handle(self, request: dict[str, Any]) -> list[dict[str, Any]]:
+        self.validate_request(request)
+        request_id = request["id"]
+
         events = [self.event(request_id, 0, "accepted")]
         try:
-            operation = request.get("operation")
-            if operation == "bootstrap":
-                result = self.bootstrap(request.get("input", {}))
-            elif operation == "books.query":
-                result = self.books_query(request.get("library"), request.get("input", {}))
-            elif operation == "conversion.describe":
-                result = self.describe_conversion(request.get("library"), request.get("input", {}))
-            elif isinstance(operation, str) and operation in DEVICE_ACTIONS:
-                result = self.device_action(operation, request.get("library"), request.get("input", {}))
-            elif operation == "action.run":
-                result = self.action_run(request.get("library"), request.get("input", {}))
-            elif operation == "action.prepare":
-                result = self.action_prepare(request.get("library"), request.get("input", {}))
-            elif operation == "action.commit":
-                result = self.action_commit(request.get("input", {}))
-            else:
-                raise BridgeError("invalid_request", f"Unknown operation: {operation}")
+            result = self.execute(request)
             events.append(self.event(request_id, 1, "succeeded", result=result))
         except BridgeError as error:
             events.append(self.event(request_id, 1, "failed", error=error.as_dict()))
         except DeviceError as error:
             events.append(self.event(request_id, 1, "failed", error=error.as_dict()))
         return events
+
+    def execute(
+        self,
+        request: dict[str, Any],
+        context: OperationContext | None = None,
+    ) -> dict[str, Any]:
+        self.validate_request(request)
+        previous = getattr(self._operation_local, "context", None)
+        self._operation_local.context = context
+        try:
+            operation = request.get("operation")
+            if context is not None:
+                context.report_progress({"fraction": 0.03, "message": self.operation_label(operation)})
+            if operation == "bootstrap":
+                return self.bootstrap(request.get("input", {}))
+            if operation == "books.query":
+                return self.books_query(request.get("library"), request.get("input", {}))
+            if operation == "conversion.describe":
+                return self.describe_conversion(request.get("library"), request.get("input", {}))
+            if isinstance(operation, str) and operation in DEVICE_ACTIONS:
+                return self.device_action(operation, request.get("library"), request.get("input", {}))
+            if operation == "action.run":
+                return self.action_run(request.get("library"), request.get("input", {}))
+            if operation == "action.prepare":
+                return self.action_prepare(request.get("library"), request.get("input", {}))
+            if operation == "action.commit":
+                return self.action_commit(request.get("input", {}))
+            if operation == "action.discard":
+                return self.action_discard(request.get("input", {}))
+            raise BridgeError("invalid_request", f"Unknown operation: {operation}")
+        finally:
+            self._operation_local.context = previous
+
+    @staticmethod
+    def operation_label(operation: Any) -> str:
+        labels = {
+            "bootstrap": "Loading Calibre library",
+            "books.query": "Searching Calibre library",
+            "conversion.describe": "Loading conversion options",
+            "action.run": "Running Calibre action",
+            "action.prepare": "Preparing Calibre action",
+            "action.commit": "Applying confirmed action",
+            "action.discard": "Discarding prepared action",
+            "device.probe": "Checking ebook reader",
+            "device.info": "Reading ebook reader",
+            "device.list": "Reading ebook reader files",
+            "device.send": "Sending book to ebook reader",
+            "device.eject": "Ejecting ebook reader",
+        }
+        return labels.get(operation, "Running Calibre operation")
 
     @staticmethod
     def event(
@@ -284,7 +397,8 @@ class CalibreBridge:
         if not path.is_dir() or not (path / "metadata.db").is_file():
             return None
         token = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:24]
-        self.libraries[token] = path
+        with self._state_lock:
+            self.libraries[token] = path
         return {
             "token": token,
             "name": path.name,
@@ -359,6 +473,7 @@ class CalibreBridge:
             recursive = input_data.get("recursive", False)
             return self.device_adapter.list(path, recursive=recursive)
         if action == "device.eject":
+            self.begin_commit()
             return self.device_adapter.eject()
         if action == "device.send":
             return self.device_send(library_token, input_data)
@@ -396,6 +511,7 @@ class CalibreBridge:
                 ]
             )
             source = self.staged_device_format(staging, format_name)
+            self.begin_commit()
             sent = self.device_adapter.send(source, destination, force=force)
             return {**sent, "bookId": book_id, "format": format_name}
         finally:
@@ -426,15 +542,14 @@ class CalibreBridge:
             raise BridgeError("invalid_request", "bookIds must contain between 1 and 100 positive integers")
         book_ids = list(dict.fromkeys(raw_ids))
         books = [self.get_book(library_token, book_id) for book_id in book_ids]
-        confirmation_token = secrets.token_urlsafe(24)
-        self.confirmations[confirmation_token] = {
+        confirmation_token = self.store_confirmation({
             "expires": time.monotonic() + 60,
             "name": "book.remove",
             "libraryToken": library_token,
             "library": library,
             "bookIds": book_ids,
             "bookRevisions": {book["id"]: book["modified"] for book in books},
-        }
+        })
         titles = ", ".join(book["title"] for book in books[:3])
         if len(books) > 3:
             titles += f", and {len(books) - 3} more"
@@ -450,7 +565,7 @@ class CalibreBridge:
         token = input_data.get("confirmationToken")
         if not isinstance(token, str) or not token:
             raise BridgeError("confirmation_required", "A valid confirmation is required")
-        plan = self.confirmations.pop(token, None)
+        plan = self.pop_confirmation(token)
         if plan is None:
             raise BridgeError("confirmation_required", "The confirmation has expired or was already used")
         if plan["expires"] < time.monotonic():
@@ -469,7 +584,8 @@ class CalibreBridge:
                     "--with-library",
                     str(plan["library"]),
                     ",".join(str(book_id) for book_id in book_ids),
-                ]
+                ],
+                commit=True,
             )
             return {"removedIds": book_ids}
         if plan["name"] == "format.replace":
@@ -490,7 +606,8 @@ class CalibreBridge:
                     str(plan["library"]),
                     str(plan["bookId"]),
                     str(source),
-                ]
+                ],
+                commit=True,
             )
             book = self.get_book(plan["libraryToken"], plan["bookId"])
             attached = self.find_format(book, plan["format"])
@@ -511,7 +628,8 @@ class CalibreBridge:
                     str(plan["library"]),
                     str(plan["bookId"]),
                     plan["format"],
-                ]
+                ],
+                commit=True,
             )
             book = self.get_book(plan["libraryToken"], plan["bookId"])
             return {"book": book, "removedFormat": plan["format"]}
@@ -531,6 +649,7 @@ class CalibreBridge:
                         revision,
                         "An exported file changed; review the replacement again",
                     )
+                self.begin_commit()
                 files = self.publish_staged_export(staging, destination, replace=True)
                 return self.export_result(destination, files)
             finally:
@@ -560,7 +679,8 @@ class CalibreBridge:
                         str(plan["library"]),
                         str(plan["bookId"]),
                         str(plan["output"]),
-                    ]
+                    ],
+                    commit=True,
                 )
                 book = self.get_book(plan["libraryToken"], plan["bookId"])
                 attached = self.find_format(book, plan["outputFormat"])
@@ -576,10 +696,57 @@ class CalibreBridge:
                 self.cleanup_plan(plan)
         raise BridgeError("confirmation_required", "The confirmation action is unavailable")
 
+    def action_discard(self, input_data: Any) -> dict[str, bool]:
+        if not isinstance(input_data, dict):
+            raise BridgeError("invalid_request", "Discard input must be an object")
+        token = input_data.get("confirmationToken")
+        if not isinstance(token, str) or not token:
+            raise BridgeError("invalid_request", "A confirmation token is required")
+        plan = self.pop_confirmation(token)
+        if plan is None:
+            return {"discarded": False}
+        self.cleanup_plan(plan)
+        return {"discarded": True}
+
+    def pop_confirmation(self, token: str) -> dict[str, Any] | None:
+        with self._state_lock:
+            return self.confirmations.pop(token, None)
+
+    def store_confirmation(self, plan: dict[str, Any]) -> str:
+        try:
+            self.begin_commit()
+            self.prune_confirmations()
+            token = secrets.token_urlsafe(24)
+            with self._state_lock:
+                self.confirmations[token] = plan
+            return token
+        except Exception:
+            self.cleanup_plan(plan)
+            raise
+
+    def prune_confirmations(self) -> int:
+        now = time.monotonic()
+        expired: list[dict[str, Any]] = []
+        with self._state_lock:
+            for token, plan in list(self.confirmations.items()):
+                if plan.get("expires", 0) < now:
+                    expired.append(self.confirmations.pop(token))
+        for plan in expired:
+            self.cleanup_plan(plan)
+        return len(expired)
+
+    def close(self) -> None:
+        with self._state_lock:
+            plans = list(self.confirmations.values())
+            self.confirmations.clear()
+        for plan in plans:
+            self.cleanup_plan(plan)
+
     def require_library(self, library_token: Any) -> Path:
         if not isinstance(library_token, str) or not library_token:
             raise BridgeError("invalid_request", "A library token is required")
-        library = self.libraries.get(library_token)
+        with self._state_lock:
+            library = self.libraries.get(library_token)
         if library is None:
             raise BridgeError("library_unavailable", "The selected library is unavailable")
         return library
@@ -603,7 +770,7 @@ class CalibreBridge:
             if calibre_field is None:
                 raise BridgeError("invalid_request", f"Unsupported metadata field: {field}")
             command.extend(["--field", f"{calibre_field}:{self.metadata_value(field, value)}"])
-        self.run(command)
+        self.run(command, commit=True)
         return {"book": self.get_book(library_token, book_id)}
 
     def set_cover(
@@ -632,7 +799,8 @@ class CalibreBridge:
                 str(book_id),
                 "--field",
                 f"cover:{path}",
-            ]
+            ],
+            commit=True,
         )
         return {"book": self.get_book(library_token, book_id)}
 
@@ -659,7 +827,7 @@ class CalibreBridge:
         if input_data.get("oneBookPerDirectory") is True:
             command.append("--one-book-per-directory")
         command.extend(str(path) for path in resolved_paths)
-        self.run(command)
+        self.run(command, commit=True)
         after = self.library_book_ids(library)
         added = sorted(after - before)
         file_count = sum(1 for path in resolved_paths if path.is_file())
@@ -699,7 +867,8 @@ class CalibreBridge:
                 "--dont-replace",
                 str(book_id),
                 str(source),
-            ]
+            ],
+            commit=True,
         )
         book = self.get_book(library_token, book_id)
         attached = next(
@@ -723,8 +892,7 @@ class CalibreBridge:
             raise BridgeError("invalid_request", "Replacement file must have an extension")
         book = self.get_book(library_token, book_id)
         target = self.find_format(book, format_name)
-        confirmation_token = secrets.token_urlsafe(24)
-        self.confirmations[confirmation_token] = {
+        confirmation_token = self.store_confirmation({
             "expires": time.monotonic() + 60,
             "name": "format.replace",
             "libraryToken": library_token,
@@ -734,7 +902,7 @@ class CalibreBridge:
             "source": source,
             "sourceRevision": self.file_revision(source),
             "targetRevision": self.file_revision(Path(target["path"])),
-        }
+        })
         return {
             "confirmationToken": confirmation_token,
             "expiresInSeconds": 60,
@@ -757,8 +925,7 @@ class CalibreBridge:
         format_name = format_name.upper()
         book = self.get_book(library_token, book_id)
         target = self.find_format(book, format_name)
-        confirmation_token = secrets.token_urlsafe(24)
-        self.confirmations[confirmation_token] = {
+        confirmation_token = self.store_confirmation({
             "expires": time.monotonic() + 60,
             "name": "format.remove",
             "libraryToken": library_token,
@@ -766,7 +933,7 @@ class CalibreBridge:
             "bookId": book_id,
             "format": format_name,
             "targetRevision": self.file_revision(Path(target["path"])),
-        }
+        })
         return {
             "confirmationToken": confirmation_token,
             "expiresInSeconds": 60,
@@ -863,6 +1030,7 @@ class CalibreBridge:
         book_ids, destination = self.export_request(library_token, input_data)
         staging = self.stage_export(library, book_ids)
         try:
+            self.begin_commit()
             files = self.publish_staged_export(staging, destination, replace=False)
             return self.export_result(destination, files)
         finally:
@@ -890,7 +1058,8 @@ class CalibreBridge:
                     "--dont-replace",
                     str(book_id),
                     str(output),
-                ]
+                ],
+                commit=True,
             )
         finally:
             shutil.rmtree(staging, ignore_errors=True)
@@ -919,8 +1088,7 @@ class CalibreBridge:
         )
         assert target is not None
         staging, output = self.stage_conversion(source, output_format, options)
-        confirmation_token = secrets.token_urlsafe(24)
-        self.confirmations[confirmation_token] = {
+        confirmation_token = self.store_confirmation({
             "expires": time.monotonic() + 60,
             "name": "book.convert.replace",
             "libraryToken": library_token,
@@ -936,7 +1104,7 @@ class CalibreBridge:
             "staging": staging,
             "output": output,
             "outputRevision": self.file_revision(output),
-        }
+        })
         return {
             "confirmationToken": confirmation_token,
             "expiresInSeconds": 60,
@@ -1006,8 +1174,9 @@ class CalibreBridge:
             raise
 
     def conversion_capabilities(self) -> dict[str, Any]:
-        if self._conversion_capabilities is not None:
-            return self._conversion_capabilities
+        with self._state_lock:
+            if self._conversion_capabilities is not None:
+                return self._conversion_capabilities
         fallback = {
             "inputFormats": [
                 "EPUB", "AZW3", "MOBI", "LIT", "PRC", "FB2", "HTML", "HTM",
@@ -1023,7 +1192,8 @@ class CalibreBridge:
         }
         executable = shutil.which("calibre-debug")
         if executable is None:
-            self._conversion_capabilities = fallback
+            with self._state_lock:
+                self._conversion_capabilities = fallback
             return fallback
         code = (
             "import json; "
@@ -1048,10 +1218,13 @@ class CalibreBridge:
                 raise ValueError("missing conversion capability fields")
             if not all(isinstance(discovered[key], list) for key in required - {"defaultOutputFormat", "source"}):
                 raise ValueError("invalid conversion capability lists")
-            self._conversion_capabilities = discovered
+            result = discovered
         except (BridgeError, json.JSONDecodeError, TypeError, ValueError):
-            self._conversion_capabilities = fallback
-        return self._conversion_capabilities
+            result = fallback
+        with self._state_lock:
+            if self._conversion_capabilities is None:
+                self._conversion_capabilities = result
+            return self._conversion_capabilities
 
     def describe_conversion(self, library_token: Any, input_data: Any) -> dict[str, Any]:
         self.require_library(library_token)
@@ -1168,10 +1341,10 @@ class CalibreBridge:
             shutil.rmtree(staging, ignore_errors=True)
             raise BridgeError("invalid_request", "Export cannot replace a directory")
 
-        confirmation_token = secrets.token_urlsafe(24)
-        self.confirmations[confirmation_token] = {
+        confirmation_token = self.store_confirmation({
             "expires": time.monotonic() + 60,
             "name": "book.export.replace",
+            "libraryToken": library_token,
             "staging": staging,
             "destination": destination,
             "stagedRevisions": {
@@ -1180,7 +1353,7 @@ class CalibreBridge:
             "targetRevisions": {
                 relative: self.file_revision(destination / relative) for relative in collisions
             },
-        }
+        })
         return {
             "confirmationToken": confirmation_token,
             "expiresInSeconds": 60,
@@ -1207,7 +1380,9 @@ class CalibreBridge:
         raw_destination = input_data.get("destination")
         if not isinstance(raw_destination, str) or not raw_destination:
             raise BridgeError("invalid_request", "Export destination must be a non-empty string")
-        destination = Path(raw_destination).expanduser().resolve()
+        destination = self.canonical_export_destination(raw_destination)
+        if destination is None:
+            raise BridgeError("invalid_request", "Export destination must be a valid path")
         if destination.exists() and not destination.is_dir():
             raise BridgeError("invalid_request", "Export destination must be a directory")
         parent = destination.parent
@@ -1433,24 +1608,102 @@ class CalibreBridge:
             "modified": str(row.get("last_modified", "") or ""),
         }
 
-    @staticmethod
-    def run(command: list[str], *, timeout: float = 120) -> subprocess.CompletedProcess[str]:
+    def begin_commit(self) -> None:
+        context = getattr(self._operation_local, "context", None)
+        if context is None:
+            return
+        if context.begin_commit():
+            return
+        context.check_cancelled()
+        raise BridgeError("operation_finished", "The Calibre operation is no longer active")
+
+    def run(
+        self,
+        command: list[str],
+        *,
+        timeout: float = 120,
+        context: OperationContext | None = None,
+        cwd: Path | None = None,
+        commit: bool = False,
+        check: bool = True,
+    ) -> subprocess.CompletedProcess[str]:
+        active_context = context or getattr(self._operation_local, "context", None)
+        if active_context is not None:
+            active_context.check_cancelled()
+            if commit and not active_context.begin_commit():
+                active_context.check_cancelled()
+                raise BridgeError("operation_finished", "The Calibre operation is no longer active")
+            active_context.report_progress(
+                {"message": f"Running {Path(command[0]).name}"}
+            )
         try:
-            return subprocess.run(
+            process = subprocess.Popen(
                 command,
-                check=True,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout,
+                cwd=cwd,
+                start_new_session=True,
             )
         except FileNotFoundError as error:
             raise BridgeError("capability_unavailable", f"Required command is unavailable: {command[0]}") from error
+        except OSError as error:
+            raise BridgeError("tool_failed", f"Calibre command could not start: {command[0]}") from error
+
+        if active_context is not None:
+            active_context.register_process_terminator(
+                lambda: self.cancel_process_group(process)
+            )
+
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
         except subprocess.TimeoutExpired as error:
+            self.terminate_process_group(process)
+            try:
+                stdout, stderr = process.communicate(timeout=1)
+            except subprocess.TimeoutExpired:
+                self.terminate_process_group(process, force=True)
+                stdout, stderr = process.communicate()
             raise BridgeError("timeout", f"Calibre command timed out: {command[0]}", retryable=True) from error
-        except subprocess.CalledProcessError as error:
-            detail = (error.stderr or error.stdout or "").strip()
+
+        if active_context is not None:
+            active_context.check_cancelled()
+        completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+        if check and process.returncode != 0:
+            detail = (stderr or stdout or "").strip()
             message = detail.splitlines()[-1] if detail else f"Calibre command failed: {command[0]}"
-            raise BridgeError("tool_failed", message) from error
+            raise BridgeError("tool_failed", message)
+        return completed
+
+    @staticmethod
+    def terminate_process_group(process: subprocess.Popen[str], *, force: bool = False) -> None:
+        if process.poll() is not None:
+            return
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        except OSError:
+            try:
+                process.kill() if force else process.terminate()
+            except ProcessLookupError:
+                return
+
+    @classmethod
+    def cancel_process_group(cls, process: subprocess.Popen[str]) -> None:
+        cls.terminate_process_group(process)
+
+        def escalate() -> None:
+            try:
+                process.wait(timeout=0.5)
+            except subprocess.TimeoutExpired:
+                cls.terminate_process_group(process, force=True)
+
+        threading.Thread(
+            target=escalate,
+            name=f"calibre-cancel-{process.pid}",
+            daemon=True,
+        ).start()
 
 
 def emit(event: dict[str, Any]) -> None:
@@ -1458,30 +1711,86 @@ def emit(event: dict[str, Any]) -> None:
     sys.stdout.flush()
 
 
-def main() -> int:
-    bridge = CalibreBridge()
-    for raw_line in sys.stdin:
-        if not raw_line.strip():
-            continue
+class BridgeRuntime:
+    """Keep the JSON-lines transport responsive while Calibre work runs."""
+
+    def __init__(
+        self,
+        bridge: Any,
+        emitter: Callable[[dict[str, Any]], None] = emit,
+        *,
+        max_workers: int = 4,
+    ) -> None:
+        self.bridge = bridge
+        self.emitter = emitter
+        self._emit_lock = threading.RLock()
+        self.scheduler = OperationScheduler(self._emit_scheduled, max_workers=max_workers)
+
+    def receive(self, request: Any) -> None:
+        request_id = request.get("id", "invalid") if isinstance(request, dict) else "invalid"
         try:
-            request = json.loads(raw_line)
-            if not isinstance(request, dict):
-                raise BridgeError("invalid_request", "Request must be a JSON object")
-            events = bridge.handle(request)
-        except json.JSONDecodeError:
-            events = [
-                CalibreBridge.event(
-                    "invalid",
-                    0,
-                    "failed",
-                    error=BridgeError("invalid_request", "Request must be valid JSON").as_dict(),
-                )
-            ]
+            self.bridge.validate_request(request)
         except BridgeError as error:
-            request_id = request.get("id", "invalid") if isinstance(request, dict) else "invalid"
-            events = [CalibreBridge.event(str(request_id), 0, "failed", error=error.as_dict())]
-        for event in events:
-            emit(event)
+            self.reject(str(request_id), error)
+            return
+
+        if request.get("type") == "cancel":
+            self.scheduler.cancel(request["id"])
+            return
+
+        try:
+            key = self.bridge.scheduling_key(request)
+            self.scheduler.submit(
+                request["id"],
+                lambda context: self.bridge.execute(request, context),
+                key=key,
+            )
+        except DuplicateRequest:
+            self.reject(request["id"], BridgeError("duplicate_request", "Request id was already used"))
+        except SchedulerClosed:
+            self.reject(request["id"], BridgeError("bridge_stopped", "The Calibre bridge is stopping", retryable=True))
+        except (TypeError, ValueError) as error:
+            self.reject(request["id"], BridgeError("invalid_request", str(error)))
+
+    def reject(self, request_id: str, error: BridgeError) -> None:
+        self._emit(
+            CalibreBridge.event(
+                request_id or "invalid",
+                0,
+                "failed",
+                error=error.as_dict(),
+            )
+        )
+
+    def close(self) -> None:
+        self.scheduler.close()
+        closer = getattr(self.bridge, "close", None)
+        if callable(closer):
+            closer()
+
+    def _emit_scheduled(self, event: dict[str, Any]) -> None:
+        payload = {"protocol": PROTOCOL_VERSION, **event}
+        self._emit(payload)
+
+    def _emit(self, event: dict[str, Any]) -> None:
+        with self._emit_lock:
+            self.emitter(event)
+
+
+def main() -> int:
+    runtime = BridgeRuntime(CalibreBridge())
+    try:
+        for raw_line in sys.stdin:
+            if not raw_line.strip():
+                continue
+            try:
+                request = json.loads(raw_line)
+            except json.JSONDecodeError:
+                runtime.reject("invalid", BridgeError("invalid_request", "Request must be valid JSON"))
+                continue
+            runtime.receive(request)
+    finally:
+        runtime.close()
     return 0
 
 

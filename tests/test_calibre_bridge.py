@@ -117,6 +117,15 @@ class CalibreBridgeContractTest(unittest.TestCase):
         self.bridge.close()
         self.temp_dir.cleanup()
 
+    def assert_successful_lifecycle(self, events: list[dict]) -> None:
+        self.assertEqual(events[0]["type"], "accepted")
+        self.assertEqual(events[-1]["type"], "succeeded")
+        self.assertTrue(any(event["type"] == "progress" for event in events))
+        self.assertEqual(
+            [event["sequence"] for event in events],
+            list(range(len(events))),
+        )
+
     def start_device_bridge(self, *, info: str | None = None) -> Path:
         self.bridge.close()
         device_bin = Path(self.temp_dir.name) / "device-bin"
@@ -171,7 +180,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertTrue(result["calibre"]["available"])
         self.assertRegex(result["calibre"]["version"], r"^9\.")
@@ -220,7 +229,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertEqual(
             result["calibre"],
@@ -413,7 +422,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         book = events[-1]["result"]["book"]
         self.assertEqual(book["title"], "Dune Messiah")
         self.assertEqual(book["tags"], ["science fiction", "politics"])
@@ -571,7 +580,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertFalse(result["replaced"])
         self.assertEqual(result["format"]["name"], "TXT")
@@ -697,7 +706,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertEqual(result["destination"], str(destination.resolve()))
         exported = [Path(item["path"]) for item in result["files"]]
@@ -817,7 +826,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertEqual(result["inputFormat"], "TXT")
         self.assertEqual(result["outputFormat"], "EPUB")
@@ -858,7 +867,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual([event["type"] for event in events], ["accepted", "succeeded"])
+        self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertEqual(result["inputFormat"], "TXT")
         self.assertEqual(result["outputFormat"], "EPUB")

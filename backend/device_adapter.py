@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Callable
 
@@ -86,9 +87,14 @@ class DeviceAdapter:
         self._executable = self._resolve_executable(executable)
         self._runner = runner or self._run_process
         self._capabilities: dict[str, Any] | None = None
+        self._lock = threading.RLock()
 
     def capabilities(self) -> dict[str, Any]:
         """Return executable/version/command capability information."""
+        with self._lock:
+            return self._discover_capabilities()
+
+    def _discover_capabilities(self) -> dict[str, Any]:
         if self._capabilities is not None:
             return self._capabilities
 
