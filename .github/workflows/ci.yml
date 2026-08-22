@@ -49,4 +49,4 @@ jobs:
         run: tests/qml-lint-test.sh
 
       - name: Check patch hygiene
-        run: git diff --check "$(git hash-object -t tree /dev/null)" HEAD
+        run: git diff --check "$(git hash-object -t tree -w /dev/null)" HEAD
