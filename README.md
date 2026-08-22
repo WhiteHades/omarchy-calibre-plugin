@@ -7,7 +7,6 @@
 <p align="center">Manage your ebook library from the Omarchy Quattro bar.</p>
 
 <p align="center">
-  <a href="https://github.com/WhiteHades/omarchy-calibre-plugin/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/WhiteHades/omarchy-calibre-plugin/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/WhiteHades/omarchy-calibre-plugin/releases"><img alt="Release" src="https://img.shields.io/github/v/release/WhiteHades/omarchy-calibre-plugin"></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-7aa2f7"></a>
   <img alt="Omarchy Quattro" src="https://img.shields.io/badge/Omarchy-Quattro-bb9af7">

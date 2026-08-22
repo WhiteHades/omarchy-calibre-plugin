@@ -22,7 +22,7 @@ tests/qml-workflow-test.sh
 tests/qml-bridge-test.sh
 ```
 
-The QML behavior checks require an Omarchy Wayland session. CI runs syntax and contract checks without opening a visible panel. For interface changes, test the affected flow in an isolated fixture before testing the installed plugin.
+The QML behavior checks require a local Omarchy Wayland session but do not open a visible panel. For interface changes, test the affected flow in an isolated fixture before testing the installed plugin.
 
 Add a regression test for every bug fix. Keep commits focused and use short conventional subjects such as `fix: guard stale export targets`.
 
