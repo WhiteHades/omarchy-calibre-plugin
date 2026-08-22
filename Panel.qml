@@ -456,6 +456,7 @@ Panel {
     commands.push({ id: "add-folder", label: "Add books from folder", key: "", keywords: "import recurse directory" })
     commands.push({ id: "choose-library", label: "Add another library", key: "", keywords: "switch choose folder" })
     commands.push({ id: "refresh", label: "Refresh Calibre library", key: "r", keywords: "reload rescan" })
+    commands.push({ id: "help", label: "Keyboard help and diagnostics", key: "?", keywords: "shortcuts status version troubleshoot" })
     if (jobs.length > 0)
       commands.push({ id: "jobs", label: "Show Calibre jobs", key: "", keywords: "progress cancel history" })
     return commands
@@ -474,6 +475,7 @@ Panel {
     else if (commandId === "choose-library" && !chooseLibrary.running) chooseLibrary.running = true
     else if (commandId === "refresh") refresh()
     else if (commandId === "jobs") dialogMode = "jobs"
+    else if (commandId === "help") dialogMode = "help"
   }
 
   function preferredFormat(book) {
@@ -623,11 +625,22 @@ Panel {
       : "No tags"
   }
 
-  function libraryName() {
+  function currentLibraryRecord() {
     for (var i = 0; i < viewState.libraries.length; i++) {
-      if (viewState.libraries[i].token === viewState.currentLibrary) return viewState.libraries[i].name
+      if (viewState.libraries[i].token === viewState.currentLibrary) return viewState.libraries[i]
     }
+    return null
+  }
+
+  function libraryName() {
+    var library = currentLibraryRecord()
+    if (library) return library.name || "Library"
     return "Library"
+  }
+
+  function libraryPath() {
+    var library = currentLibraryRecord()
+    return library && library.path ? String(library.path) : ""
   }
 
   onOpenedChanged: if (opened) {
@@ -776,6 +789,7 @@ Panel {
         else if (text === "s" || text === "S") root.runPrimaryAction("export")
         else if (text === "f" || text === "F") root.runSecondaryAction("formats")
         else if (text === "p" || text === "P" || text === ":") root.dialogMode = "commands"
+        else if (text === "?") root.dialogMode = "help"
       }
 
       Item {
@@ -1330,7 +1344,7 @@ Panel {
                 Text {
                   visible: root.selectedBook !== null
                   width: parent.width
-                  text: "/ search  ·  p commands  ·  r refresh"
+                  text: "/ search  ·  p commands  ·  ? help  ·  r refresh"
                   color: Qt.darker(root.foreground, 1.65)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.caption
@@ -1409,6 +1423,23 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           onCommandRequested: function(commandId) { root.runCommand(commandId) }
+          onCanceled: root.dialogMode = ""
+        }
+
+        HelpDialog {
+          visible: root.dialogMode === "help"
+          anchors.fill: parent
+          z: 10
+          calibreVersion: String(root.viewState.calibre.version || "")
+          calibreStatus: String(root.viewState.readiness.state || root.viewState.calibre.status || "")
+          libraryName: root.libraryName()
+          libraryPath: root.libraryPath()
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onRetryRequested: {
+            root.dialogMode = ""
+            root.refresh()
+          }
           onCanceled: root.dialogMode = ""
         }
 

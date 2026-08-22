@@ -146,6 +146,16 @@ class PluginContractTest(unittest.TestCase):
         for command_id in ("add-files", "add-folder", "choose-library", "refresh", "jobs"):
             self.assertIn(f'id: "{command_id}"', panel)
 
+    def test_keyboard_help_includes_live_calibre_diagnostics(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("HelpDialog {", panel)
+        self.assertIn('id: "help"', panel)
+        self.assertIn('text === "?"', panel)
+        self.assertIn('root.dialogMode = "help"', panel)
+        self.assertIn("calibreVersion: String(root.viewState.calibre.version", panel)
+        self.assertIn("libraryPath: root.libraryPath()", panel)
+
     def test_tracked_sources_do_not_publish_a_private_home_path(self) -> None:
         private_home = "/home/" + "efaz"
         for path in ROOT.rglob("*"):
