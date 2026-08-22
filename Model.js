@@ -220,6 +220,13 @@ function formatBytes(value) {
   return rounded + " " + units[index]
 }
 
+function combineSearch(query, filter) {
+  var typed = String(query || "").trim()
+  var scoped = String(filter || "").trim()
+  if (typed && scoped) return "(" + typed + ") and (" + scoped + ")"
+  return typed || scoped
+}
+
 function beginRequest(state, requestId, label) {
   var next = copyState(state)
   var jobs = {}
@@ -337,6 +344,7 @@ if (typeof module !== "undefined") {
     preferredFormat: preferredFormat,
     formatPublished: formatPublished,
     formatBytes: formatBytes,
+    combineSearch: combineSearch,
     beginRequest: beginRequest,
     applyBridgeEvent: applyBridgeEvent,
     jobList: jobList,

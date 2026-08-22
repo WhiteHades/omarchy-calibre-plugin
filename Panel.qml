@@ -29,6 +29,7 @@ Panel {
   property string dialogMode: ""
   property string sortField: "title"
   property string sortDirection: "ascending"
+  property string filterQuery: ""
   property var confirmation: null
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
@@ -314,7 +315,7 @@ Panel {
   function search() {
     if (viewState.mode !== "library" || !viewState.currentLibrary) return
     submit("books.query", {
-      search: searchField.text,
+      search: Model.combineSearch(searchField.text, filterQuery),
       sort: sortField,
       direction: sortDirection,
       limit: Number(setting("pageSize", 50))
@@ -324,7 +325,7 @@ Panel {
   function loadMore() {
     if (!viewState.nextCursor || !viewState.currentLibrary) return
     submit("books.query", {
-      search: searchField.text,
+      search: Model.combineSearch(searchField.text, filterQuery),
       sort: sortField,
       direction: sortDirection,
       limit: Number(setting("pageSize", 50)),
@@ -680,7 +681,7 @@ Panel {
       id: keyCatcher
       anchors.fill: parent
       blocked: root.dialogMode !== "" || searchField.activeFocus
-        || libraryDropdown.popupOpen || sortDropdown.popupOpen
+        || libraryDropdown.popupOpen || sortDropdown.popupOpen || filterDropdown.popupOpen
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
@@ -788,7 +789,7 @@ Panel {
 
             Column {
               id: libraryControl
-              width: Style.space(170)
+              width: Style.space(145)
               spacing: Style.space(2)
 
               Dropdown {
@@ -815,7 +816,7 @@ Panel {
 
             Dropdown {
               id: sortDropdown
-              width: Style.space(125)
+              width: Style.space(105)
               showLabel: false
               options: [
                 { value: "title", label: "Title" },
@@ -850,7 +851,7 @@ Panel {
 
             TextField {
               id: searchField
-              width: Style.space(205)
+              width: Style.space(180)
               anchors.verticalCenter: parent.verticalCenter
               placeholderText: "Search library  /"
               foreground: root.foreground
@@ -861,6 +862,29 @@ Panel {
               }
               Keys.onReturnPressed: {
                 searchDelay.stop()
+                root.search()
+              }
+            }
+
+            Dropdown {
+              id: filterDropdown
+              width: Style.space(110)
+              showLabel: false
+              options: [
+                { value: "", label: "All books" },
+                { value: "date:>30daysago", label: "Added lately" },
+                { value: "rating:>=4", label: "Rated 4+" },
+                { value: "cover:false", label: "Missing cover" },
+                { value: "formats:false", label: "No files" },
+                { value: "formats:=EPUB", label: "EPUB" },
+                { value: "formats:=PDF", label: "PDF" }
+              ]
+              value: root.filterQuery
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+              onChanged: function(value) {
+                root.filterQuery = value
                 root.search()
               }
             }
