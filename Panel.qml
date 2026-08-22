@@ -83,7 +83,7 @@ Panel {
   }
   readonly property var secondaryActions: [
     { id: "formats", label: "Manage formats", key: "f" },
-    { id: "remove", label: "Remove from library", key: "del" }
+    { id: "remove", label: "Remove from library", key: "x" }
   ]
 
   function open() {

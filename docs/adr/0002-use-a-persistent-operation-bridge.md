@@ -28,13 +28,13 @@ The persistent bridge uses newline-delimited JSON. A bridge operation receives a
 
 The bootstrap operation returns detected libraries, the first bounded book page, the Calibre version, and capabilities. Common book records use a stable shape. Uncommon metadata and conversion controls use runtime descriptors.
 
-Public Calibre commands remain the mutation authority. A separate read-only Calibre-runtime adapter can provide faster indexed reads and dynamic option data when capability checks pass. The public command adapter remains the fallback.
+Public Calibre commands remain the library authority. A separate read-only Calibre-runtime helper provides dynamic conversion options when capability checks pass.
 
 ## Invariants
 
 - QML submits domain operations, not executable names or shell strings.
 - Processes receive argument arrays. User values never become shell code.
-- Mutations are serialized per library. Reads can run concurrently.
+- Local `calibredb` commands are serialized globally to respect Calibre's single-instance database lock. Independent non-database work can run concurrently.
 - Destructive work uses prepare and commit operations with an expiring confirmation token.
 - Book deletion always uses Calibre's recoverable path.
 - Conversion and export stage output before attachment or replacement.

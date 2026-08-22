@@ -9,7 +9,7 @@ Manage a Calibre library from Omarchy without opening the Calibre desktop interf
 The two-pane panel keeps the book list on the left and the selected book on the right. It includes:
 
 - local library discovery, switching, and remembered libraries;
-- fast Calibre search, common filters, sorting, and saved searches;
+- Calibre search, common filters, sorting, and bounded detail pages;
 - cover, title, authors, series, rating, tags, formats, and reading details;
 - file and folder import with Calibre's default duplicate handling;
 - common metadata editing, cover changes, and metadata download;
@@ -18,18 +18,17 @@ The two-pane panel keeps the book list on the left and the selected book on the 
 - format add, replace, remove, and export;
 - connected-device detection and send-to-device when Calibre supports it;
 - safe book removal through Calibre's recoverable deletion path;
-- cancellable jobs, progress, errors, diagnostics, recents, and keyboard help;
+- cancellable jobs, activity, errors, diagnostics, and keyboard help;
 - a command palette for actions that should not occupy permanent space.
 
 ## Secondary controls
 
 These remain available through contextual menus, expandable sections, or the command palette:
 
-- uncommon and custom metadata fields;
-- format-specific conversion options and saved profiles;
-- full-text search status and indexing;
-- reveal in file manager, copy metadata or citation, and open with another app;
-- library checks and metadata backup when they can run safely.
+- format-specific conversion options reported by the installed Calibre version;
+- metadata download previews and per-field choices;
+- format replacement and removal;
+- jobs, diagnostics, and connected-reader controls.
 
 ## Outside the initial product
 
@@ -40,7 +39,10 @@ These remain available through contextual menus, expandable sections, or the com
 - custom-column schema design;
 - scheduled news recipes and credential management;
 - low-level device filesystem management;
-- legacy format-specific utilities.
+- legacy format-specific utilities;
+- saved searches, full-text indexing controls, and recent-item history;
+- library checks, metadata backup, and saved conversion profiles;
+- uncommon metadata and custom-column editing.
 
 These exclusions keep the default experience focused. They do not prevent later additions when user demand justifies them.
 

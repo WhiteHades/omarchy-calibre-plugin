@@ -27,7 +27,7 @@ BorderSurface {
   readonly property var shortcuts: [
     { label: "Search", key: "/" },
     { label: "Commands", key: "P or :" },
-    { label: "Move", key: "Arrow keys" },
+    { label: "Move", key: "H J K L or arrows" },
     { label: "Run selected action", key: "Enter" },
     { label: "Open book", key: "O" },
     { label: "Edit metadata", key: "E" },
@@ -35,6 +35,7 @@ BorderSurface {
     { label: "Send to reader", key: "D" },
     { label: "Export", key: "S" },
     { label: "Manage formats", key: "F" },
+    { label: "Remove from library", key: "X or Delete" },
     { label: "Refresh", key: "R" },
     { label: "Close", key: "Esc" }
   ]

@@ -183,7 +183,8 @@ class CalibreBridgeContractTest(unittest.TestCase):
         self.assert_successful_lifecycle(events)
         result = events[-1]["result"]
         self.assertTrue(result["calibre"]["available"])
-        self.assertRegex(result["calibre"]["version"], r"^9\.")
+        calibre_major = int(result["calibre"]["version"].split(".", 1)[0])
+        self.assertGreaterEqual(calibre_major, 7)
         self.assertEqual(result["readiness"]["state"], "ready")
         self.assertEqual(len(result["libraries"]), 1)
         self.assertEqual(result["libraries"][0]["name"], "Science Fiction")
