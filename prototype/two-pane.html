@@ -1,0 +1,1689 @@
+<!-- Question: Which two-pane Calibre panel gets a new user from library to first book with the least friction? -->
+<!doctype html>
+<html lang="en" data-theme="omarchy">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Throwaway UI prototype for the Omarchy Calibre panel">
+  <title>Calibre panel prototype</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101315;
+      --bg-deep: #0b0d0f;
+      --surface: #171b1e;
+      --surface-raised: #1d2327;
+      --surface-soft: #131719;
+      --surface-hover: #20272b;
+      --line: rgba(202, 204, 204, 0.17);
+      --line-strong: rgba(202, 204, 204, 0.36);
+      --text: #cacccc;
+      --text-bright: #e1e4e4;
+      --muted: #899295;
+      --dim: #899295;
+      --accent: #7aa2f7;
+      --accent-soft: rgba(122, 162, 247, 0.13);
+      --accent-faint: rgba(122, 162, 247, 0.06);
+      --green: #9ece6a;
+      --yellow: #e0af68;
+      --urgent: #f7768e;
+      --font: "IA Writer Quattro", "JetBrains Mono", "Iosevka", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      --sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --radius: 2px;
+      --unit: 4px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body { min-height: 100%; }
+
+    body {
+      margin: 0;
+      background: var(--bg-deep);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    button, input, select { font: inherit; }
+
+    button { color: inherit; }
+
+    button:focus-visible,
+    input:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .app {
+      min-height: 100vh;
+      max-width: 1500px;
+      margin: 0 auto;
+      padding: 0 18px 96px;
+    }
+
+    .shell-bar {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      letter-spacing: 0.02em;
+    }
+
+    .shell-brand,
+    .shell-state,
+    .section-kicker,
+    .eyebrow,
+    .table-head,
+    .field-label,
+    .status-label,
+    .switcher-kicker {
+      font-family: var(--font);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-size: 10px;
+    }
+
+    .shell-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-bright);
+    }
+
+    .shell-mark {
+      display: inline-grid;
+      place-items: center;
+      width: 21px;
+      height: 21px;
+      border: 1px solid var(--line-strong);
+      color: var(--accent);
+      font-size: 11px;
+    }
+
+    .shell-state {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+      color: var(--dim);
+    }
+
+    .state-dot {
+      width: 6px;
+      height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+    }
+
+    .variant {
+      padding-top: 28px;
+    }
+
+    .panel-topline {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      padding-bottom: 18px;
+    }
+
+    .context-block h1,
+    .context-block h2,
+    .context-block p,
+    .detail-title,
+    .book-lead h2,
+    .c-dossier h2 {
+      margin: 0;
+    }
+
+    .context-block h1 {
+      margin-top: 2px;
+      color: var(--text-bright);
+      font-size: clamp(20px, 2vw, 27px);
+      font-weight: 500;
+      letter-spacing: -0.03em;
+    }
+
+    .context-block p {
+      margin-top: 5px;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 12px;
+    }
+
+    .top-actions,
+    .inline-actions,
+    .action-row,
+    .action-stack,
+    .format-list,
+    .tag-list,
+    .legend {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .button,
+    .filter-button,
+    .source-button,
+    .command-button,
+    .tab-button,
+    .action-button,
+    .sort-button {
+      appearance: none;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-soft);
+      min-height: 30px;
+      padding: 5px 10px;
+      cursor: pointer;
+      text-align: left;
+      transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+    }
+
+    .button:hover,
+    .filter-button:hover,
+    .source-button:hover,
+    .command-button:hover,
+    .tab-button:hover,
+    .action-button:hover,
+    .sort-button:hover,
+    .book-row:hover {
+      border-color: var(--line-strong);
+      background: var(--surface-hover);
+      color: var(--text-bright);
+    }
+
+    .button.primary,
+    .action-button.primary,
+    .command-button.primary {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--text-bright);
+    }
+
+    .button.quiet,
+    .action-button.quiet,
+    .sort-button {
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .icon-button {
+      display: inline-grid;
+      place-items: center;
+      width: 30px;
+      padding: 0;
+      text-align: center;
+    }
+
+    .workspace {
+      min-height: 640px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .a-workspace {
+      display: grid;
+      grid-template-columns: minmax(560px, 1.2fr) minmax(365px, 0.8fr);
+    }
+
+    .a-left-pane {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: 174px minmax(0, 1fr);
+      border-right: 1px solid var(--line);
+    }
+
+    .a-filter-pane,
+    .a-list-pane,
+    .a-detail-pane,
+    .b-catalogue,
+    .b-inspector,
+    .c-dossier,
+    .c-results {
+      min-width: 0;
+    }
+
+    .a-filter-pane {
+      padding: 16px 12px;
+      border-right: 1px solid var(--line);
+      background: var(--surface-soft);
+    }
+
+    .a-list-pane,
+    .a-detail-pane {
+      padding: 16px;
+    }
+
+    .a-detail-pane { background: var(--surface-soft); }
+
+    .source-button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px;
+      margin-bottom: 18px;
+      color: var(--text-bright);
+      font-size: 12px;
+    }
+
+    .source-button small {
+      display: block;
+      margin-top: 2px;
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    .filter-heading,
+    .section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin: 0 0 6px;
+      color: var(--dim);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .filter-list,
+    .saved-list,
+    .command-list {
+      display: grid;
+      gap: 2px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .filter-button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      min-height: 28px;
+      padding: 4px 7px;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .filter-button.active {
+      border-color: var(--line);
+      background: var(--accent-soft);
+      color: var(--text-bright);
+    }
+
+    .count,
+    .row-meta,
+    .helper,
+    .muted {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .saved-list { margin-top: 22px; }
+
+    .saved-list button {
+      appearance: none;
+      padding: 5px 7px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      text-align: left;
+      font-size: 11px;
+    }
+
+    .saved-list button:hover { color: var(--text-bright); }
+
+    .filter-status {
+      margin-top: 28px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+
+    .filter-status strong {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--green);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .filter-status p {
+      margin: 0;
+      color: var(--dim);
+      font-family: var(--sans);
+      font-size: 10px;
+    }
+
+    .list-toolbar,
+    .inspector-toolbar,
+    .result-toolbar,
+    .dossier-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 27px;
+    }
+
+    .list-toolbar { margin-bottom: 12px; }
+
+    .list-title {
+      color: var(--text-bright);
+      font-size: 12px;
+    }
+
+    .search-field {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 130px;
+      height: 32px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--bg-deep);
+      color: var(--dim);
+    }
+
+    .search-field:focus-within {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .search-field input {
+      width: 100%;
+      min-width: 0;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text-bright);
+    }
+
+    .search-field input::placeholder { color: var(--dim); }
+
+    .search-field input::-webkit-search-cancel-button { filter: grayscale(1); }
+
+    .list-subtoolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 28px;
+      border-bottom: 1px solid var(--line);
+      color: var(--dim);
+    }
+
+    .list-subtoolbar .legend { gap: 12px; }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 10px;
+    }
+
+    .legend-mark {
+      width: 6px;
+      height: 6px;
+      background: var(--green);
+      border-radius: 50%;
+    }
+
+    .legend-mark.dim { background: var(--dim); }
+
+    .book-list {
+      display: grid;
+      gap: 0;
+      margin-top: 2px;
+    }
+
+    .book-row {
+      appearance: none;
+      width: 100%;
+      display: grid;
+      grid-template-columns: 32px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 9px;
+      min-height: 60px;
+      padding: 8px 6px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .book-row.selected {
+      border-left: 2px solid var(--accent);
+      padding-left: 4px;
+      background: var(--accent-faint);
+    }
+
+    .row-title {
+      display: block;
+      overflow: hidden;
+      color: var(--text-bright);
+      font-size: 12px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .row-author {
+      display: block;
+      overflow: hidden;
+      margin-top: 2px;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .row-side { text-align: right; }
+
+    .row-side .format-badges { justify-content: flex-end; }
+
+    .format-badges {
+      display: flex;
+      gap: 3px;
+      flex-wrap: wrap;
+    }
+
+    .format-badge,
+    .tag,
+    .state-badge,
+    .mini-badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 18px;
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      color: var(--muted);
+      font-size: 9px;
+      letter-spacing: 0.04em;
+    }
+
+    .format-badge { color: var(--text); }
+
+    .state-badge.ready {
+      border-color: rgba(158, 206, 106, 0.38);
+      color: var(--green);
+    }
+
+    .state-badge.warn {
+      border-color: rgba(224, 175, 104, 0.4);
+      color: var(--yellow);
+    }
+
+    .cover {
+      flex: 0 0 auto;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      width: 32px;
+      height: 45px;
+      padding: 4px;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-left: 3px solid var(--cover-ink);
+      background: var(--cover);
+      color: var(--cover-ink);
+      box-shadow: 2px 2px 0 rgba(0, 0, 0, 0.22);
+      font-size: 7px;
+      line-height: 1.1;
+    }
+
+    .cover.large {
+      width: 142px;
+      height: 198px;
+      padding: 10px;
+      border-left-width: 5px;
+      font-size: 11px;
+      line-height: 1.25;
+    }
+
+    .cover.medium {
+      width: 92px;
+      height: 132px;
+      padding: 8px;
+      border-left-width: 4px;
+      font-size: 9px;
+      line-height: 1.2;
+    }
+
+    .cover-mark {
+      width: fit-content;
+      padding: 1px 3px;
+      background: rgba(0, 0, 0, 0.55);
+      color: #ffffff;
+      font-size: 1.25em;
+      font-weight: 700;
+      letter-spacing: -0.1em;
+    }
+
+    .cover-label {
+      padding: 2px 3px;
+      max-height: 3.3em;
+      overflow: hidden;
+      background: rgba(0, 0, 0, 0.58);
+      color: #ffffff;
+      font-weight: 600;
+      letter-spacing: -0.02em;
+    }
+
+    .detail-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 27px;
+      margin-bottom: 18px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .selected-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .selected-label::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      background: var(--accent);
+      border-radius: 50%;
+    }
+
+    .detail-hero,
+    .book-lead,
+    .dossier-lead {
+      display: flex;
+      gap: 16px;
+    }
+
+    .detail-hero {
+      align-items: flex-start;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .detail-title {
+      color: var(--text-bright);
+      font-size: 20px;
+      font-weight: 500;
+      letter-spacing: -0.04em;
+      line-height: 1.2;
+    }
+
+    .detail-author,
+    .book-lead .author,
+    .dossier-lead .author {
+      margin-top: 5px;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 12px;
+    }
+
+    .detail-series,
+    .book-lead .series,
+    .dossier-lead .series {
+      margin-top: 9px;
+      color: var(--accent);
+      font-size: 11px;
+    }
+
+    .detail-rating {
+      margin-top: 12px;
+      color: var(--yellow);
+      letter-spacing: 0.1em;
+    }
+
+    .detail-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      margin-top: 16px;
+    }
+
+    .action-button {
+      min-height: 34px;
+      padding: 7px 8px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .action-button small {
+      display: block;
+      margin-top: 1px;
+      color: var(--dim);
+      font-size: 9px;
+    }
+
+    .detail-section {
+      padding-top: 17px;
+    }
+
+    .detail-section + .detail-section { border-top: 1px solid var(--line); }
+
+    .detail-section h3 {
+      margin: 0 0 9px;
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .metadata-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px 14px;
+      margin: 0;
+    }
+
+    .metadata-grid > div { min-width: 0; }
+
+    .metadata-grid dt {
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    .metadata-grid dd {
+      margin: 1px 0 0;
+      overflow: hidden;
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tag-list { gap: 5px; }
+
+    .tag { color: var(--text); }
+
+    .format-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 28px;
+      padding: 4px 0;
+      border-bottom: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .format-line:last-child { border-bottom: 0; }
+
+    .format-line strong { color: var(--text); font-weight: 500; }
+
+    /* Variant B: one flat catalogue table with an always-visible inspector. */
+    .b-panel-topline { align-items: center; }
+
+    .b-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .shortcut {
+      display: inline-flex;
+      align-items: center;
+      min-height: 19px;
+      padding: 1px 5px;
+      border: 1px solid var(--line);
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    .b-workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(310px, 0.75fr);
+    }
+
+    .b-catalogue { padding: 14px 16px; }
+
+    .b-inspector {
+      padding: 14px 16px;
+      border-left: 1px solid var(--line);
+      background: var(--surface-soft);
+    }
+
+    .b-command-strip {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 6px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .b-command-strip .search-field { height: 34px; }
+
+    .command-button {
+      min-height: 34px;
+      white-space: nowrap;
+      font-size: 11px;
+    }
+
+    .b-table-head,
+    .b-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.75fr) 64px 82px;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .b-table-head {
+      min-height: 34px;
+      padding: 8px 10px 5px;
+      color: var(--dim);
+    }
+
+    .b-row {
+      width: 100%;
+      min-height: 56px;
+      padding: 8px 10px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .b-row.selected {
+      border-left: 2px solid var(--accent);
+      padding-left: 8px;
+      background: var(--accent-faint);
+    }
+
+    .b-book-cell { min-width: 0; }
+
+    .b-book-cell .row-title { font-size: 12px; }
+
+    .b-author,
+    .b-plain-cell {
+      display: block;
+      overflow: hidden;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 11px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .b-plain-cell { color: var(--text); }
+
+    .b-row .format-badges { align-items: center; }
+
+    .b-catalogue-foot {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 12px;
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    .inspector-toolbar { margin-bottom: 20px; }
+
+    .inspector-toolbar .section-kicker { color: var(--muted); }
+
+    .book-lead { align-items: center; }
+
+    .book-lead h2 {
+      color: var(--text-bright);
+      font-size: 17px;
+      font-weight: 500;
+      letter-spacing: -0.04em;
+      line-height: 1.2;
+    }
+
+    .inspector-copy { min-width: 0; }
+
+    .inspector-copy .format-badges { margin-top: 10px; }
+
+    .b-inspector .metadata-grid { margin-top: 20px; }
+
+    .inspector-block {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+
+    .inspector-block h3 {
+      margin: 0 0 8px;
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .command-list { gap: 3px; }
+
+    .command-list .action-button {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 30px;
+      padding: 5px 8px;
+    }
+
+    .command-list .action-button span:last-child {
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    /* Variant C: selected book leads on the left; the right pane is a grouped queue. */
+    .c-workspace {
+      display: grid;
+      grid-template-columns: minmax(360px, 0.82fr) minmax(560px, 1.18fr);
+    }
+
+    .c-dossier {
+      padding: 16px;
+      border-right: 1px solid var(--line);
+      background: var(--surface-soft);
+    }
+
+    .c-results { padding: 16px; }
+
+    .dossier-toolbar,
+    .result-toolbar { margin-bottom: 19px; }
+
+    .dossier-toolbar .section-kicker,
+    .result-toolbar .section-kicker { color: var(--muted); }
+
+    .dossier-lead {
+      align-items: flex-start;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .dossier-lead h2 {
+      color: var(--text-bright);
+      font-size: 21px;
+      font-weight: 500;
+      letter-spacing: -0.05em;
+      line-height: 1.16;
+    }
+
+    .dossier-copy { min-width: 0; }
+
+    .dossier-copy .detail-rating { margin-top: 10px; }
+
+    .dossier-summary {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .dossier-actions {
+      display: grid;
+      gap: 6px;
+      margin-top: 17px;
+    }
+
+    .dossier-actions .action-button {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .dossier-actions .action-button span:last-child {
+      color: var(--dim);
+      font-size: 10px;
+    }
+
+    .c-section {
+      padding-top: 16px;
+    }
+
+    .c-section + .c-section { border-top: 1px solid var(--line); }
+
+    .c-section h3 {
+      margin: 0 0 9px;
+      color: var(--dim);
+      font-size: 10px;
+      font-weight: 500;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .result-toolbar { align-items: flex-start; }
+
+    .result-title { color: var(--text-bright); font-size: 13px; }
+
+    .result-count { margin-top: 2px; color: var(--dim); font-size: 10px; }
+
+    .c-group + .c-group {
+      margin-top: 22px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+    }
+
+    .c-group-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 4px;
+      color: var(--dim);
+      font-size: 10px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .c-row {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 38px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 62px;
+      padding: 8px 6px;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+
+    .c-row:hover { background: var(--surface-hover); }
+
+    .c-row.selected {
+      border-left: 2px solid var(--accent);
+      padding-left: 4px;
+      background: var(--accent-faint);
+    }
+
+    .c-row .cover { width: 38px; height: 48px; }
+
+    .c-row-side {
+      display: grid;
+      justify-items: end;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .empty-results {
+      padding: 28px 8px;
+      color: var(--muted);
+      font-family: var(--sans);
+      font-size: 12px;
+    }
+
+    .prototype-switcher {
+      position: fixed;
+      z-index: 10;
+      left: 50%;
+      bottom: 18px;
+      display: flex;
+      align-items: stretch;
+      min-width: 280px;
+      transform: translateX(-50%);
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      background: rgba(13, 16, 18, 0.97);
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .switcher-arrow {
+      appearance: none;
+      width: 40px;
+      border: 0;
+      background: transparent;
+      color: var(--text-bright);
+      cursor: pointer;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .switcher-arrow:hover { background: var(--accent-soft); color: var(--accent); }
+
+    .switcher-state {
+      flex: 1;
+      display: grid;
+      place-items: center;
+      gap: 1px;
+      min-height: 54px;
+      padding: 6px 12px;
+      border-right: 1px solid var(--line);
+      border-left: 1px solid var(--line);
+      text-align: center;
+    }
+
+    .switcher-kicker { color: var(--accent); }
+
+    .switcher-name { color: var(--text-bright); font-size: 11px; }
+
+    .switcher-help { color: var(--dim); font-size: 9px; }
+
+    .toast {
+      position: fixed;
+      z-index: 12;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(380px, calc(100vw - 36px));
+      padding: 9px 11px;
+      border: 1px solid var(--line-strong);
+      border-left: 2px solid var(--accent);
+      background: var(--surface-raised);
+      color: var(--text);
+      font-family: var(--sans);
+      font-size: 11px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(5px);
+      transition: opacity 140ms ease, transform 140ms ease;
+    }
+
+    .toast.visible { opacity: 1; transform: translateY(0); }
+
+    @media (max-width: 1100px) {
+      .a-workspace,
+      .b-workspace,
+      .c-workspace { grid-template-columns: minmax(0, 1fr); }
+
+      .a-left-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+      .a-detail-pane,
+      .b-inspector,
+      .c-dossier { border-left: 0; border-right: 0; }
+      .b-inspector,
+      .c-dossier { border-top: 1px solid var(--line); }
+    }
+
+    @media (max-width: 720px) {
+      .app { padding-right: 10px; padding-left: 10px; }
+      .shell-state { display: none; }
+      .panel-topline { align-items: flex-start; flex-direction: column; }
+      .top-actions { width: 100%; }
+      .a-left-pane { grid-template-columns: minmax(0, 1fr); }
+      .a-filter-pane { border-right: 0; border-bottom: 1px solid var(--line); }
+      .filter-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .saved-list, .filter-status { display: none; }
+      .b-table-head { display: none; }
+      .b-row { grid-template-columns: minmax(0, 1fr) auto; }
+      .b-row > :nth-child(2) { display: none; }
+      .b-row > :nth-child(3) { grid-column: 2; grid-row: 1; }
+      .b-row > :nth-child(4) { grid-column: 2; grid-row: 2; }
+      .b-command-strip { grid-template-columns: minmax(0, 1fr) auto; }
+      .b-command-strip .command-button:last-child { display: none; }
+      .detail-hero, .book-lead, .dossier-lead { flex-direction: column; }
+      .detail-actions { grid-template-columns: 1fr 1fr; }
+      .c-results, .c-dossier, .a-list-pane, .a-detail-pane, .b-catalogue, .b-inspector { padding: 12px; }
+      .prototype-switcher { bottom: 10px; }
+      .toast { right: 10px; bottom: 76px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="shell-bar" aria-label="Omarchy shell context">
+      <div class="shell-brand"><span class="shell-mark" aria-hidden="true">▣</span><span>omarchy / calibre</span></div>
+      <div class="shell-state"><span class="state-dot" aria-hidden="true"></span><span>library ready</span><span>·</span><span>read-only prototype</span></div>
+    </header>
+    <main id="variant-root" aria-live="polite"></main>
+  </div>
+
+  <nav class="prototype-switcher" aria-label="Prototype variants">
+    <button class="switcher-arrow" id="previous-variant" type="button" aria-label="Previous variant">←</button>
+    <div class="switcher-state">
+      <div class="switcher-kicker">prototype</div>
+      <div class="switcher-name" id="variant-name">A · split rail</div>
+      <div class="switcher-help">use ← / → to switch</div>
+    </div>
+    <button class="switcher-arrow" id="next-variant" type="button" aria-label="Next variant">→</button>
+  </nav>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const BOOKS = [
+      {
+        id: "left-hand",
+        title: "The Left Hand of Darkness",
+        author: "Ursula K. Le Guin",
+        year: "1969",
+        publisher: "Ace",
+        series: "Hainish Cycle · 4",
+        tags: ["science fiction", "Hainish", "politics"],
+        formats: ["EPUB", "AZW3", "PDF"],
+        size: "1.8 MB",
+        opened: "2 days ago",
+        status: "ready",
+        statusLabel: "on device",
+        rating: 5,
+        mark: "LE GUIN",
+        coverLabel: "THE LEFT HAND OF DARKNESS",
+        cover: "#536d8f",
+        coverInk: "#e6edf3",
+        summary: "On the planet Gethen, a lone envoy tries to bring two nations into a wider human conversation."
+      },
+      {
+        id: "earthsea",
+        title: "A Wizard of Earthsea",
+        author: "Ursula K. Le Guin",
+        year: "1968",
+        publisher: "Clarion Books",
+        series: "Earthsea · 1",
+        tags: ["fantasy", "coming of age"],
+        formats: ["EPUB", "MOBI"],
+        size: "1.1 MB",
+        opened: "today",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 5,
+        mark: "EARTHSEA",
+        coverLabel: "A WIZARD OF EARTHSEA",
+        cover: "#5a705f",
+        coverInk: "#eff0d5",
+        summary: "Ged learns that a name has weight, and that power is safer when it is used with care."
+      },
+      {
+        id: "kindred",
+        title: "Kindred",
+        author: "Octavia E. Butler",
+        year: "1979",
+        publisher: "Beacon Press",
+        series: "",
+        tags: ["historical", "speculative"],
+        formats: ["EPUB", "AZW3", "PDF"],
+        size: "2.4 MB",
+        opened: "6 days ago",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 5,
+        mark: "BUTLER",
+        coverLabel: "KINDRED",
+        cover: "#785d53",
+        coverInk: "#f2dfc5",
+        summary: "A writer is pulled through time and forced to face the family history that made her possible."
+      },
+      {
+        id: "dispossessed",
+        title: "The Dispossessed",
+        author: "Ursula K. Le Guin",
+        year: "1974",
+        publisher: "Harper Voyager",
+        series: "Hainish Cycle · 6",
+        tags: ["science fiction", "politics"],
+        formats: ["EPUB", "AZW3"],
+        size: "1.6 MB",
+        opened: "11 days ago",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 4,
+        mark: "ANARCHY",
+        coverLabel: "THE DISPOSSESSED",
+        cover: "#806d4e",
+        coverInk: "#f3e6c6",
+        summary: "A physicist crosses between two worlds built on different answers to the question of ownership."
+      },
+      {
+        id: "master-margarita",
+        title: "The Master and Margarita",
+        author: "Mikhail Bulgakov",
+        year: "1967",
+        publisher: "Vintage Classics",
+        series: "",
+        tags: ["satire", "russia"],
+        formats: ["EPUB", "PDF"],
+        size: "2.1 MB",
+        opened: "3 weeks ago",
+        status: "ready",
+        statusLabel: "pdf ready",
+        rating: 4,
+        mark: "MOSCOW",
+        coverLabel: "THE MASTER AND MARGARITA",
+        cover: "#684e5f",
+        coverInk: "#f0d9e7",
+        summary: "The devil arrives in Moscow. A writer, his lover, and a talking cat make room for the impossible."
+      },
+      {
+        id: "city-city",
+        title: "The City & the City",
+        author: "China Miéville",
+        year: "2009",
+        publisher: "Del Rey",
+        series: "",
+        tags: ["mystery", "weird fiction"],
+        formats: ["EPUB", "AZW3"],
+        size: "1.4 MB",
+        opened: "1 month ago",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 4,
+        mark: "BORLÚ",
+        coverLabel: "THE CITY & THE CITY",
+        cover: "#4d6c73",
+        coverInk: "#dceeee",
+        summary: "A detective investigates a murder across two cities whose residents are trained not to see each other."
+      },
+      {
+        id: "braiding-sweetgrass",
+        title: "Braiding Sweetgrass",
+        author: "Robin Wall Kimmerer",
+        year: "2013",
+        publisher: "Milkweed Editions",
+        series: "",
+        tags: ["nature", "essays"],
+        formats: ["EPUB", "PDF"],
+        size: "3.2 MB",
+        opened: "yesterday",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 5,
+        mark: "PLANTS",
+        coverLabel: "BRAIDING SWEETGRASS",
+        cover: "#5f7859",
+        coverInk: "#e8e8c4",
+        summary: "Plants, language, and reciprocity offer a practical way to notice the living world around us."
+      },
+      {
+        id: "odyssey",
+        title: "The Odyssey",
+        author: "Homer, translated by Emily Wilson",
+        year: "2017",
+        publisher: "W. W. Norton",
+        series: "",
+        tags: ["epic", "translation"],
+        formats: ["EPUB", "AZW3", "PDF"],
+        size: "2.7 MB",
+        opened: "5 days ago",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 4,
+        mark: "ITHACA",
+        coverLabel: "THE ODYSSEY",
+        cover: "#73664d",
+        coverInk: "#f4e5c8",
+        summary: "A clear, fast translation of a long trip home, with enough room for its jokes and sharp edges."
+      },
+      {
+        id: "book-disquiet",
+        title: "The Book of Disquiet",
+        author: "Fernando Pessoa",
+        year: "1982",
+        publisher: "New Directions",
+        series: "",
+        tags: ["fragments", "portugal"],
+        formats: ["EPUB"],
+        size: "0.9 MB",
+        opened: "2 months ago",
+        status: "warn",
+        statusLabel: "metadata check",
+        rating: 3,
+        mark: "LISBON",
+        coverLabel: "THE BOOK OF DISQUIET",
+        cover: "#655c72",
+        coverInk: "#e4dff0",
+        summary: "Short pieces from a fictional bookkeeper, arranged like weather passing over a single room."
+      },
+      {
+        id: "piranesi",
+        title: "Piranesi",
+        author: "Susanna Clarke",
+        year: "2020",
+        publisher: "Bloomsbury",
+        series: "",
+        tags: ["fantasy", "labyrinth"],
+        formats: ["EPUB", "AZW3"],
+        size: "1.3 MB",
+        opened: "4 days ago",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 5,
+        mark: "HOUSE",
+        coverLabel: "PIRANESI",
+        cover: "#4d7180",
+        coverInk: "#e2f1ef",
+        summary: "A man maps an endless house, its statues, its tides, and the limits of what he remembers."
+      },
+      {
+        id: "fifth-season",
+        title: "The Fifth Season",
+        author: "N. K. Jemisin",
+        year: "2015",
+        publisher: "Orbit",
+        series: "The Broken Earth · 1",
+        tags: ["science fiction", "climate"],
+        formats: ["EPUB", "AZW3", "MOBI"],
+        size: "1.9 MB",
+        opened: "8 days ago",
+        status: "ready",
+        statusLabel: "epub ready",
+        rating: 5,
+        mark: "STILLNESS",
+        coverLabel: "THE FIFTH SEASON",
+        cover: "#735b4f",
+        coverInk: "#f1d7ba",
+        summary: "A world breaks open. Three women carry different pieces of the story toward the same disaster."
+      },
+      {
+        id: "three-body",
+        title: "The Three-Body Problem",
+        author: "Cixin Liu",
+        year: "2008",
+        publisher: "Tor Books",
+        series: "Remembrance of Earth's Past · 1",
+        tags: ["science fiction", "first contact"],
+        formats: ["EPUB", "PDF"],
+        size: "2.0 MB",
+        opened: "2 weeks ago",
+        status: "ready",
+        statusLabel: "pdf ready",
+        rating: 4,
+        mark: "TRISOLARIS",
+        coverLabel: "THE THREE-BODY PROBLEM",
+        cover: "#4f6472",
+        coverInk: "#e1eef2",
+        summary: "A strange virtual world and a series of deaths point to a problem with consequences beyond Earth."
+      }
+    ];
+
+    const VARIANTS = ["A", "B", "C"];
+    const VARIANT_NAMES = {
+      A: "A · split rail",
+      B: "B · catalogue inspector",
+      C: "C · book-led queue"
+    };
+    let selectedId = "left-hand";
+    let query = "";
+    let toastTimer;
+
+    const app = document.getElementById("variant-root");
+    const nameEl = document.getElementById("variant-name");
+    const toast = document.getElementById("toast");
+
+    function currentVariant() {
+      const value = new URLSearchParams(window.location.search).get("variant");
+      return VARIANTS.includes((value || "").toUpperCase()) ? value.toUpperCase() : "A";
+    }
+
+    function selectedBook() {
+      return BOOKS.find((book) => book.id === selectedId) || BOOKS[0];
+    }
+
+    function visibleBooks() {
+      const needle = query.trim().toLowerCase();
+      if (!needle) return BOOKS;
+      return BOOKS.filter((book) => [book.title, book.author, book.tags.join(" "), book.formats.join(" ")].join(" ").toLowerCase().includes(needle));
+    }
+
+    function stars(rating) {
+      return "★".repeat(rating) + "☆".repeat(5 - rating);
+    }
+
+    function cover(book, size = "small") {
+      return `<div class="cover ${size}" style="--cover:${book.cover};--cover-ink:${book.coverInk}" role="img" aria-label="Cover for ${book.title}"><span class="cover-mark">${book.mark}</span><span class="cover-label">${book.coverLabel}</span></div>`;
+    }
+
+    function formats(book) {
+      return `<div class="format-badges">${book.formats.map((format) => `<span class="format-badge">${format}</span>`).join("")}</div>`;
+    }
+
+    function tags(book) {
+      return `<div class="tag-list">${book.tags.map((tag) => `<span class="tag">${tag}</span>`).join("")}</div>`;
+    }
+
+    function status(book) {
+      return `<span class="state-badge ${book.status}">${book.statusLabel}</span>`;
+    }
+
+    function searchField(placeholder = "Search books") {
+      return `<label class="search-field"><span aria-hidden="true">/</span><input class="book-search" type="search" value="${query.replace(/"/g, "&quot;")}" placeholder="${placeholder}" aria-label="Search books"></label>`;
+    }
+
+    function metadata(book) {
+      return `<dl class="metadata-grid">
+        <div><dt>Publisher</dt><dd>${book.publisher}</dd></div>
+        <div><dt>Published</dt><dd>${book.year}</dd></div>
+        <div><dt>Last opened</dt><dd>${book.opened}</dd></div>
+        <div><dt>Size</dt><dd>${book.size}</dd></div>
+      </dl>`;
+    }
+
+    function actionButton(label, detail, action, extra = "") {
+      return `<button class="action-button ${extra}" type="button" data-demo-action="${action}"><span>${label}<small>${detail}</small></span><span aria-hidden="true">›</span></button>`;
+    }
+
+    function aBookRow(book) {
+      return `<button class="book-row ${book.id === selectedId ? "selected" : ""}" type="button" data-book-id="${book.id}" aria-pressed="${book.id === selectedId}">
+        ${cover(book)}
+        <span><span class="row-title">${book.title}</span><span class="row-author">${book.author}</span></span>
+        <span class="row-side">${formats(book)}<span class="row-meta">${book.year}</span></span>
+      </button>`;
+    }
+
+    function bBookRow(book) {
+      return `<button class="b-row ${book.id === selectedId ? "selected" : ""}" type="button" data-book-id="${book.id}" aria-pressed="${book.id === selectedId}">
+        <span class="b-book-cell"><span class="row-title">${book.title}</span><span class="b-author">${book.author}</span></span>
+        <span class="b-plain-cell">${book.series || book.tags[0]}</span>
+        <span class="b-plain-cell">${book.year}</span>
+        <span>${status(book)}</span>
+      </button>`;
+    }
+
+    function cBookRow(book) {
+      return `<button class="c-row ${book.id === selectedId ? "selected" : ""}" type="button" data-book-id="${book.id}" aria-pressed="${book.id === selectedId}">
+        ${cover(book)}
+        <span><span class="row-title">${book.title}</span><span class="row-author">${book.author}</span><span class="row-meta">${book.tags.slice(0, 2).join(" · ")}</span></span>
+        <span class="c-row-side">${status(book)}<span>${book.opened}</span></span>
+      </button>`;
+    }
+
+    function variantA() {
+      const book = selectedBook();
+      return `<section class="variant variant-a" aria-labelledby="variant-a-title">
+        <header class="panel-topline">
+          <div class="context-block"><div class="section-kicker">calibre / library</div><h1 id="variant-a-title">Books</h1><p>1,248 books · sorted by last opened</p></div>
+          <div class="top-actions"><button class="button quiet" type="button" data-demo-action="library">Change library</button><button class="button primary" type="button" data-demo-action="add">+ Add books</button></div>
+        </header>
+        <div class="workspace a-workspace">
+          <div class="a-left-pane">
+            <aside class="a-filter-pane" aria-label="Library filters">
+              <button class="source-button" type="button" data-demo-action="library"><span>Books · local<small>~/Books/Calibre</small></span><span aria-hidden="true">⌄</span></button>
+              <div class="filter-heading"><span>Library</span><span>⌘</span></div>
+              <ul class="filter-list">
+                <li><button class="filter-button active" type="button"><span>All books</span><span class="count">1,248</span></button></li>
+                <li><button class="filter-button" type="button"><span>Unread</span><span class="count">186</span></button></li>
+                <li><button class="filter-button" type="button"><span>On device</span><span class="count">42</span></button></li>
+                <li><button class="filter-button" type="button"><span>Needs review</span><span class="count">7</span></button></li>
+              </ul>
+              <div class="saved-list"><div class="section-heading"><span>Saved searches</span><span>+</span></div><button type="button">Science fiction</button><button type="button">Short fiction</button><button type="button">Added this month</button></div>
+              <div class="filter-status"><strong>● Calibre bridge idle</strong><p>Last sync 4 minutes ago</p></div>
+            </aside>
+            <section class="a-list-pane" aria-label="Book list">
+              <div class="list-toolbar"><span class="list-title">All books <span class="count">· ${visibleBooks().length} shown</span></span>${searchField()}</div>
+              <div class="list-subtoolbar"><div class="legend"><span class="legend-item"><span class="legend-mark"></span>available</span><span class="legend-item"><span class="legend-mark dim"></span>local only</span></div><button class="sort-button" type="button" data-demo-action="sort">Last opened ↓</button></div>
+              <div class="book-list">${visibleBooks().length ? visibleBooks().map(aBookRow).join("") : '<div class="empty-results">No books match the search.</div>'}</div>
+            </section>
+          </div>
+          <article class="a-detail-pane" aria-label="Selected book">
+            <div class="detail-head"><span class="selected-label">Selected book</span><button class="button quiet icon-button" type="button" data-demo-action="more" aria-label="More book actions">···</button></div>
+            <div class="detail-hero">${cover(book, "large")}<div><h2 class="detail-title">${book.title}</h2><p class="detail-author">${book.author}</p>${book.series ? `<p class="detail-series">${book.series}</p>` : ""}<div class="detail-rating" role="img" aria-label="${book.rating} out of 5 stars">${stars(book.rating)}</div>${formats(book)}</div></div>
+            <div class="detail-actions">${actionButton("Open", `${book.formats[0]} · default`, "open", "primary")}${actionButton("Edit metadata", "common fields", "edit")}${actionButton("Convert", "quick settings", "convert")}${actionButton("Send", "choose device", "send")}</div>
+            <section class="detail-section"><h3>Common metadata</h3>${metadata(book)}<div class="tag-list" style="margin-top:11px">${tags(book)}</div></section>
+            <section class="detail-section"><h3>Formats</h3><div class="format-line"><span><strong>${book.formats[0]}</strong> · preferred</span>${status(book)}</div>${book.formats.slice(1).map((format) => `<div class="format-line"><span><strong>${format}</strong> · ${format === "PDF" ? "fixed layout" : "alternate"}</span><span class="muted">${format === "PDF" ? "2.2 MB" : "1.6 MB"}</span></div>`).join("")}</section>
+            <section class="detail-section"><h3>Reading details</h3><div class="format-line"><span>Last opened</span><span>${book.opened}</span></div><div class="format-line"><span>Reading progress</span><span class="state-badge ready">42%</span></div></section>
+          </article>
+        </div>
+      </section>`;
+    }
+
+    function variantB() {
+      const book = selectedBook();
+      return `<section class="variant variant-b" aria-labelledby="variant-b-title">
+        <header class="panel-topline b-panel-topline">
+          <div class="context-block"><div class="section-kicker">calibre / catalogue</div><h1 id="variant-b-title">Browse library</h1><p>One table for scanning. One inspector for the current row.</p></div>
+          <div class="b-header-actions"><span class="shortcut">Ctrl K</span><button class="button primary" type="button" data-demo-action="add">+ Add books</button></div>
+        </header>
+        <div class="workspace b-workspace">
+          <section class="b-catalogue" aria-label="Catalogue table">
+            <div class="b-command-strip">${searchField("Search title, author, tag") }<button class="command-button" type="button" data-demo-action="filter">Filter <span class="shortcut">F</span></button><button class="command-button primary" type="button" data-demo-action="sort">Sort: recent</button></div>
+            <div class="b-table-head table-head"><span>Title / author</span><span>Series or tag</span><span>Year</span><span>State</span></div>
+            <div class="b-table">${visibleBooks().length ? visibleBooks().map(bBookRow).join("") : '<div class="empty-results">No books match the search.</div>'}</div>
+            <div class="b-catalogue-foot"><span>Showing ${visibleBooks().length} of 1,248 books</span><span>Enter opens · Space selects</span></div>
+          </section>
+          <aside class="b-inspector" aria-label="Book inspector">
+            <div class="inspector-toolbar"><span class="section-kicker">row inspector</span><button class="button quiet icon-button" type="button" data-demo-action="more" aria-label="More book actions">···</button></div>
+            <div class="book-lead">${cover(book, "medium")}<div class="inspector-copy"><h2>${book.title}</h2><p class="author">${book.author}</p>${book.series ? `<p class="series">${book.series}</p>` : ""}${formats(book)}</div></div>
+            <div class="detail-rating" role="img" aria-label="${book.rating} out of 5 stars">${stars(book.rating)}</div>
+            ${metadata(book)}
+            <div class="inspector-block"><h3>Commands</h3><ul class="command-list"><li>${actionButton("Open", `${book.formats[0]} · default`, "open", "primary")}</li><li>${actionButton("Edit metadata", "title, author, tags", "edit")}</li><li>${actionButton("Convert", "choose output format", "convert")}</li><li>${actionButton("Send or export", "device or folder", "send")}</li></ul></div>
+            <div class="inspector-block"><h3>Tags</h3>${tags(book)}</div>
+            <div class="inspector-block"><h3>Bridge state</h3><div class="format-line"><span>Calibre</span><span class="state-badge ready">8.11 · ready</span></div><div class="format-line"><span>Pending jobs</span><span>0</span></div></div>
+          </aside>
+        </div>
+      </section>`;
+    }
+
+    function variantC() {
+      const book = selectedBook();
+      const visible = visibleBooks();
+      const recent = visible.slice(0, 6);
+      const needsReview = visible.filter((item) => item.status === "warn");
+      return `<section class="variant variant-c" aria-labelledby="variant-c-title">
+        <header class="panel-topline">
+          <div class="context-block"><div class="section-kicker">calibre / current book</div><h1 id="variant-c-title">Reading desk</h1><p>Keep the selected book in reach while the library stays visible.</p></div>
+          <div class="top-actions"><button class="button quiet" type="button" data-demo-action="library">Books · local</button><button class="button primary" type="button" data-demo-action="add">+ Add books</button></div>
+        </header>
+        <div class="workspace c-workspace">
+          <article class="c-dossier" aria-label="Current book details">
+            <div class="dossier-toolbar"><span class="section-kicker">current selection</span><button class="button quiet icon-button" type="button" data-demo-action="more" aria-label="More book actions">···</button></div>
+            <div class="dossier-lead">${cover(book, "large")}<div class="dossier-copy"><h2>${book.title}</h2><p class="author">${book.author}</p>${book.series ? `<p class="series">${book.series}</p>` : ""}<div class="detail-rating" role="img" aria-label="${book.rating} out of 5 stars">${stars(book.rating)}</div>${formats(book)}</div></div>
+            <p class="dossier-summary">${book.summary}</p>
+            <div class="dossier-actions">${actionButton(`Open ${book.formats[0]}`, "uses preferred format", "open", "primary")}${actionButton("Edit metadata", "common fields", "edit")}${actionButton("Convert", "quick conversion", "convert")}${actionButton("Send or export", "device or folder", "send")}</div>
+            <section class="c-section"><h3>Book record</h3>${metadata(book)}</section>
+            <section class="c-section"><h3>Tags</h3>${tags(book)}</section>
+            <section class="c-section"><h3>Formats</h3>${book.formats.map((format, index) => `<div class="format-line"><span><strong>${format}</strong>${index === 0 ? " · preferred" : ""}</span>${index === 0 ? status(book) : `<span class="muted">available</span>`}</div>`).join("")}</section>
+          </article>
+          <section class="c-results" aria-label="Library results">
+            <div class="result-toolbar"><div><div class="section-kicker">library / recent</div><div class="result-title">Browse and choose another book</div><div class="result-count">${visible.length} visible · 1,248 total</div></div>${searchField("Search this library")}</div>
+            <div class="c-group"><div class="c-group-heading"><span>Last opened</span><span>${recent.length}</span></div>${recent.length ? recent.map(cBookRow).join("") : '<div class="empty-results">No books match the search.</div>'}</div>
+            <div class="c-group"><div class="c-group-heading"><span>Needs review</span><span>${needsReview.length}</span></div>${needsReview.length ? needsReview.map(cBookRow).join("") : '<div class="empty-results">No records need review.</div>'}</div>
+          </section>
+        </div>
+      </section>`;
+    }
+
+    function renderVariant(replaceUrl = false) {
+      const variant = currentVariant();
+      if (replaceUrl) {
+        const url = new URL(window.location.href);
+        url.searchParams.set("variant", variant);
+        window.history.replaceState({}, "", url);
+      }
+      app.innerHTML = variant === "A" ? variantA() : variant === "B" ? variantB() : variantC();
+      nameEl.textContent = VARIANT_NAMES[variant];
+      document.title = `Calibre panel prototype · ${VARIANT_NAMES[variant]}`;
+    }
+
+    function setVariant(next) {
+      const index = VARIANTS.indexOf(currentVariant());
+      const nextIndex = (index + next + VARIANTS.length) % VARIANTS.length;
+      const url = new URL(window.location.href);
+      url.searchParams.set("variant", VARIANTS[nextIndex]);
+      window.history.replaceState({}, "", url);
+      renderVariant();
+    }
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.classList.add("visible");
+      toastTimer = window.setTimeout(() => toast.classList.remove("visible"), 2600);
+    }
+
+    function actionMessage(action, book) {
+      const messages = {
+        add: "Preview only. Add books would open the local file picker.",
+        library: "Preview only. Library switching would keep remembered sources in this menu.",
+        open: `Preview only. Open would launch ${book.formats[0]} for ${book.title}.`,
+        edit: `Preview only. Edit metadata would open the common fields for ${book.title}.`,
+        convert: `Preview only. Convert would ask for an output format and use Calibre defaults.`,
+        send: "Preview only. Send or export would show available devices and folders.",
+        filter: "Preview only. Filter would add common fields without leaving the catalogue.",
+        sort: "Preview only. Sorting is currently shown as last opened.",
+        more: "Preview only. Less common actions would live in this menu."
+      };
+      return messages[action] || "Preview only. This surface is read-only.";
+    }
+
+    document.getElementById("previous-variant").addEventListener("click", () => setVariant(-1));
+    document.getElementById("next-variant").addEventListener("click", () => setVariant(1));
+
+    app.addEventListener("click", (event) => {
+      const row = event.target.closest("[data-book-id]");
+      if (row) {
+        selectedId = row.dataset.bookId;
+        renderVariant();
+        return;
+      }
+      const action = event.target.closest("[data-demo-action]");
+      if (action) showToast(actionMessage(action.dataset.demoAction, selectedBook()));
+    });
+
+    app.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const row = event.target.closest("[data-book-id]");
+      if (!row) return;
+      event.preventDefault();
+      selectedId = row.dataset.bookId;
+      renderVariant();
+    });
+
+    app.addEventListener("input", (event) => {
+      if (!event.target.matches(".book-search")) return;
+      query = event.target.value;
+      renderVariant();
+      const nextInput = app.querySelector(".book-search");
+      if (nextInput) {
+        nextInput.focus();
+        nextInput.setSelectionRange(query.length, query.length);
+      }
+    });
+
+    document.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target;
+      if (target.matches("input, textarea, select, [contenteditable=\"true\"]")) return;
+      event.preventDefault();
+      setVariant(event.key === "ArrowRight" ? 1 : -1);
+    });
+
+    window.addEventListener("popstate", () => renderVariant());
+    renderVariant(true);
+  </script>
+</body>
+</html>
