@@ -27,6 +27,7 @@ BorderSurface {
   color: Color.background
   borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Style.normalBorderWidth)
   radius: Style.cornerRadius
+  focus: visible
 
   readonly property var conversion: capabilities && capabilities.conversion
     ? capabilities.conversion
@@ -93,7 +94,7 @@ BorderSurface {
   }
 
   function requestAdvanced() {
-    if (!inputFormat || !outputFormat || describing) return
+    if (!inputFormat || !outputFormat) return
     advancedRequested(inputFormat, outputFormat)
   }
 
@@ -148,6 +149,7 @@ BorderSurface {
   }
 
   onBookChanged: initialize()
+  onVisibleChanged: if (visible) Qt.callLater(function() { root.forceActiveFocus() })
   Component.onCompleted: initialize()
   Keys.onEscapePressed: root.canceled()
 
@@ -194,7 +196,7 @@ BorderSurface {
         }
       }
 
-      PanelActionButton {
+      CalibreActionButton {
         id: closeButton
         iconText: "󰅖"
         tooltipText: "Close"
@@ -210,7 +212,7 @@ BorderSurface {
       width: parent.width
       spacing: Style.space(12)
 
-      Dropdown {
+      CalibreDropdown {
         width: (parent.width - parent.spacing) / 2
         label: "INPUT FORMAT"
         options: root.inputOptions
@@ -225,7 +227,7 @@ BorderSurface {
         }
       }
 
-      Dropdown {
+      CalibreDropdown {
         width: (parent.width - parent.spacing) / 2
         label: "OUTPUT FORMAT"
         options: root.outputOptions
@@ -252,7 +254,7 @@ BorderSurface {
       wrapMode: Text.WordWrap
     }
 
-    Toggle {
+    CalibreToggle {
       width: parent.width
       label: "Advanced options"
       description: "Format-specific controls reported by this Calibre installation"
@@ -338,7 +340,8 @@ BorderSurface {
 
               Component {
                 id: booleanOption
-                ToggleSwitch {
+                CalibreToggleSwitch {
+                  accessibleName: optionRow.modelData.label
                   checked: root.optionValue(optionRow.modelData) === true
                   foreground: root.foreground
                   onToggled: root.setOption(optionRow.modelData.name, !checked)
@@ -347,8 +350,9 @@ BorderSurface {
 
               Component {
                 id: choiceOption
-                Dropdown {
+                CalibreDropdown {
                   width: optionRow.width
+                  accessibleName: optionRow.modelData.label
                   showLabel: false
                   options: optionRow.modelData.choices || []
                   value: String(root.optionValue(optionRow.modelData))
@@ -360,8 +364,9 @@ BorderSurface {
 
               Component {
                 id: textOption
-                TextField {
+                CalibreTextField {
                   width: optionRow.width
+                  accessibleName: optionRow.modelData.label
                   text: String(root.optionValue(optionRow.modelData) === null ? "" : root.optionValue(optionRow.modelData))
                   foreground: root.foreground
                   onEditingFinished: root.setOption(optionRow.modelData.name, text)
@@ -418,7 +423,7 @@ BorderSurface {
         wrapMode: Text.WordWrap
       }
 
-      Button {
+      CalibreButton {
         id: cancelButton
         text: "Cancel"
         foreground: root.foreground
@@ -426,7 +431,7 @@ BorderSurface {
         onClicked: root.canceled()
       }
 
-      Button {
+      CalibreButton {
         id: convertButton
         text: root.replacesFormat ? "Review replacement" : "Convert"
         bordered: true

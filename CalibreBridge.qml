@@ -7,6 +7,7 @@ Item {
 
   property int requestNumber: 0
   property var pendingLines: []
+  property var activeRequests: ({})
   property string lastError: ""
   readonly property bool running: bridgeProcess.running
   readonly property string scriptPath: decodeURIComponent(
@@ -16,7 +17,10 @@ Item {
   signal stopped(int exitCode)
 
   function start() {
-    if (!bridgeProcess.running) bridgeProcess.running = true
+    if (!bridgeProcess.running) {
+      lastError = ""
+      bridgeProcess.running = true
+    }
   }
 
   function stop() {
@@ -37,8 +41,41 @@ Item {
       input: inputData || {}
     }
     if (libraryToken) request.library = libraryToken
+    trackRequest(id, -1)
     enqueue(JSON.stringify(request))
     return id
+  }
+
+  function trackRequest(requestId, sequence) {
+    var next = {}
+    for (var id in activeRequests) next[id] = activeRequests[id]
+    next[requestId] = Number(sequence)
+    activeRequests = next
+  }
+
+  function forgetRequest(requestId) {
+    var next = {}
+    for (var id in activeRequests) if (id !== requestId) next[id] = activeRequests[id]
+    activeRequests = next
+  }
+
+  function failPending() {
+    var pending = activeRequests
+    activeRequests = ({})
+    pendingLines = []
+    for (var id in pending) {
+      message({
+        protocol: 1,
+        id: id,
+        sequence: Math.max(0, Number(pending[id]) || 0) + 1,
+        type: "failed",
+        error: {
+          code: "bridge_stopped",
+          message: "The Calibre bridge stopped before the operation finished.",
+          retryable: true
+        }
+      })
+    }
   }
 
   function cancel(requestId) {
@@ -72,7 +109,12 @@ Item {
     var text = String(line || "").trim()
     if (!text) return
     try {
-      message(JSON.parse(text))
+      var payload = JSON.parse(text)
+      var id = String(payload.id || "")
+      if (id && activeRequests[id] !== undefined) trackRequest(id, payload.sequence)
+      message(payload)
+      if (id && (payload.type === "succeeded" || payload.type === "failed"
+          || payload.type === "cancelled")) forgetRequest(id)
     } catch (error) {
       lastError = "The Calibre bridge returned invalid data."
     }
@@ -87,13 +129,14 @@ Item {
     stderr: SplitParser {
       onRead: function(line) {
         var text = String(line || "").trim()
-        if (text) root.lastError = text
+        if (text) root.lastError = "The Calibre bridge reported an internal error."
       }
     }
     onStarted: root.flush()
     onExited: function(exitCode) {
       if (exitCode !== 0 && !root.lastError)
         root.lastError = "The Calibre bridge stopped unexpectedly."
+      root.failPending()
       root.stopped(exitCode)
     }
   }

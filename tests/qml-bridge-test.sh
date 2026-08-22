@@ -54,6 +54,7 @@ fi
 
 jq -e '
   .ok == true and
+  .pendingFailure == true and
   .result.calibre.status == "missing" and
   .result.readiness.state == "calibre-missing" and
   .result.readiness.actions == [

@@ -89,7 +89,7 @@ BorderSurface {
         }
       }
 
-      PanelActionButton {
+      CalibreActionButton {
         id: closeButton
         iconText: "󰅖"
         tooltipText: "Close"
@@ -214,7 +214,7 @@ BorderSurface {
 
       Item { width: Math.max(0, parent.width - retryButton.width - closeFooterButton.width - parent.spacing * 2); height: 1 }
 
-      Button {
+      CalibreButton {
         id: retryButton
         text: "Refresh status"
         foreground: root.foreground
@@ -223,7 +223,7 @@ BorderSurface {
         onClicked: root.retryRequested()
       }
 
-      Button {
+      CalibreButton {
         id: closeFooterButton
         text: "Close"
         bordered: true

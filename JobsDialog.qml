@@ -72,7 +72,7 @@ BorderSurface {
         }
       }
 
-      PanelActionButton {
+      CalibreActionButton {
         id: closeButton
         iconText: "󰅖"
         tooltipText: "Close"
@@ -109,6 +109,9 @@ BorderSurface {
             color: "transparent"
             borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
             radius: Style.cornerRadius
+            Accessible.role: Accessible.ListItem
+            Accessible.name: String(jobRow.modelData.label || "Calibre operation")
+              + ", " + root.stateLabel(jobRow.modelData)
 
             Column {
               id: jobContent
@@ -148,7 +151,7 @@ BorderSurface {
                   }
                 }
 
-                Button {
+                CalibreButton {
                   id: actionButton
                   text: jobRow.modelData.state === "running" ? "Cancel" : "Clear"
                   foreground: jobRow.modelData.state === "failed" ? root.urgent : root.foreground
@@ -161,6 +164,7 @@ BorderSurface {
               }
 
               BorderSurface {
+                id: progressTrack
                 visible: jobRow.modelData.state === "running"
                 width: parent.width
                 height: Style.space(4)
@@ -169,10 +173,35 @@ BorderSurface {
                 radius: Style.cornerRadius
 
                 Rectangle {
-                  width: parent.width * Math.max(0.03, Math.min(1, Number(jobRow.modelData.fraction || 0)))
+                  id: progressIndicator
+                  width: jobRow.modelData.determinate === true
+                    ? parent.width * Math.max(0, Math.min(1, Number(jobRow.modelData.fraction || 0)))
+                    : Math.min(parent.width, Style.space(72))
+                  x: 0
                   height: parent.height
                   color: Color.accent
                   radius: parent.radius
+
+                  SequentialAnimation {
+                    running: progressTrack.visible && jobRow.modelData.determinate !== true
+                    loops: Animation.Infinite
+                    NumberAnimation {
+                      target: progressIndicator
+                      property: "x"
+                      from: 0
+                      to: Math.max(0, progressTrack.width - progressIndicator.width)
+                      duration: 850
+                      easing.type: Easing.InOutQuad
+                    }
+                    NumberAnimation {
+                      target: progressIndicator
+                      property: "x"
+                      from: Math.max(0, progressTrack.width - progressIndicator.width)
+                      to: 0
+                      duration: 850
+                      easing.type: Easing.InOutQuad
+                    }
+                  }
                 }
               }
             }

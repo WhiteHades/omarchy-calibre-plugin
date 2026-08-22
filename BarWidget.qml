@@ -63,11 +63,11 @@ BarWidget {
   IpcHandler {
     target: "io.github.whitehades.calibre"
 
-    function open(): void { root.broadcast("open") }
-    function close(): void { root.broadcast("close") }
-    function show(): void { root.broadcast("open") }
-    function hide(): void { root.broadcast("close") }
-    function toggle(): void { root.broadcast("togglePanel") }
+    function open(): void { root.open() }
+    function close(): void { root.close() }
+    function show(): void { root.open() }
+    function hide(): void { root.close() }
+    function toggle(): void { root.togglePanel() }
     function refresh(): void { root.broadcast("refresh") }
   }
 
@@ -84,7 +84,7 @@ BarWidget {
     tooltipText: "Calibre"
 
     onPressed: function(buttonCode) {
-      if (buttonCode === Qt.RightButton) root.refresh()
+      if (buttonCode === Qt.RightButton) root.broadcast("refresh")
       else root.togglePanel()
     }
   }

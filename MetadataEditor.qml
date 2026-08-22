@@ -136,7 +136,7 @@ BorderSurface {
         font.bold: true
       }
 
-      Button {
+      CalibreButton {
         id: downloadButton
         visible: root.downloadAvailable
         text: "Fetch metadata"
@@ -146,7 +146,7 @@ BorderSurface {
         onClicked: root.downloadRequested()
       }
 
-      Button {
+      CalibreButton {
         id: coverButton
         text: root.book && root.book.cover ? "Change cover" : "Add cover"
         bordered: true
@@ -214,6 +214,8 @@ BorderSurface {
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
           wrapMode: TextEdit.Wrap
+          Accessible.role: Accessible.EditableText
+          Accessible.name: "Comments"
           leftPadding: Style.spacing.controlPaddingX
           rightPadding: Style.spacing.controlPaddingX
           topPadding: Style.spacing.inputPaddingY
@@ -243,7 +245,7 @@ BorderSurface {
         wrapMode: Text.WordWrap
       }
 
-      Button {
+      CalibreButton {
         id: cancelButton
         text: "Cancel"
         foreground: root.foreground
@@ -251,7 +253,7 @@ BorderSurface {
         onClicked: root.canceled()
       }
 
-      Button {
+      CalibreButton {
         id: saveButton
         text: "Save"
         bordered: true

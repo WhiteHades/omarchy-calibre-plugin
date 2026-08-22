@@ -141,15 +141,24 @@ assert.equal(Model.combineSearch("title:Dune", ""), "title:Dune")
 state = Model.beginRequest(state, "convert-1", "Convert Dune")
 assert.equal(Model.activeJobCount(state), 1)
 assert.deepEqual(Model.jobList(state).map(job => job.id), ["convert-1"])
+assert.equal(state.jobs["convert-1"].determinate, false)
 state = Model.applyBridgeEvent(state, {
   id: "convert-1",
   sequence: 1,
+  type: "progress",
+  progress: { message: "Starting conversion" },
+})
+assert.equal(state.jobs["convert-1"].determinate, false)
+state = Model.applyBridgeEvent(state, {
+  id: "convert-1",
+  sequence: 2,
   type: "progress",
   progress: { fraction: 0.5, message: "Converting" },
 })
 assert.equal(state.jobs["convert-1"].state, "running")
 assert.equal(state.jobs["convert-1"].fraction, 0.5)
-state = Model.applyBridgeEvent(state, { id: "convert-1", sequence: 2, type: "succeeded", result: {} })
+assert.equal(state.jobs["convert-1"].determinate, true)
+state = Model.applyBridgeEvent(state, { id: "convert-1", sequence: 3, type: "succeeded", result: {} })
 assert.equal(state.jobs["convert-1"].state, "succeeded")
 assert.equal(Model.activeJobCount(state), 0)
 state = Model.forgetJob(state, "convert-1")

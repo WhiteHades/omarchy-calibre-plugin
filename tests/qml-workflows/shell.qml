@@ -281,6 +281,72 @@ ShellRoot {
       root.expect(root.requestIdFor("device-discard") !== "", "closing a reader conflict did not discard it")
       root.expect(panel.dialogMode === "", "closing a reader conflict left the dialog open")
 
+      panel.confirmation = {
+        token: "panel-close-confirmation",
+        returnMode: "formats"
+      }
+      panel.dialogMode = "confirm"
+      panel.dismissWorkflow()
+      root.expect(panel.confirmation === null, "closing the panel retained a destructive confirmation")
+      root.expect(panel.dialogMode === "", "closing the panel reopened the confirmation return mode")
+      root.expect(root.requestIdFor("discard-confirmation") !== "", "closing the panel did not discard its confirmation")
+
+      panel.dialogMode = "metadata-download"
+      panel.metadataBook = bookB
+      panel.metadataRequestId = "metadata-close"
+      panel.metadataLoading = true
+      panel.dismissWorkflow()
+      root.expect(panel.dialogMode === "", "closing the panel retained the metadata dialog")
+      root.expect(panel.metadataBook === null, "closing the panel retained metadata session state")
+      root.expect(panel.metadataRequestId === "", "closing the panel retained a metadata request")
+
+      panel.dialogMode = "jobs"
+      panel.dismissWorkflow()
+      root.expect(panel.dialogMode === "", "closing the panel retained a passive dialog")
+
+      panel.workflowGeneration = 4
+      panel.dialogMode = ""
+      panel.confirmation = null
+      panel.requestKinds = ({ "stale-prepare": "prepare-remove" })
+      panel.requestContexts = ({
+        "stale-prepare": {
+          workflowGeneration: 3,
+          libraryToken: "library-b",
+          bookId: bookB.id
+        }
+      })
+      panel.handleBridgeMessage({
+        id: "stale-prepare",
+        sequence: 1,
+        type: "succeeded",
+        result: { confirmationToken: "stale-prepare-token", summary: "Remove Book B" }
+      })
+      root.expect(panel.dialogMode === "", "stale preparation reopened a confirmation")
+      root.expect(panel.confirmation === null, "stale preparation replaced confirmation state")
+      root.expect(root.requestIdFor("discard-confirmation") !== "", "stale preparation token was not discarded")
+
+      panel.workflowGeneration = 8
+      panel.dialogMode = ""
+      panel.requestKinds = ({ "stale-format-result": "commit-format-replace" })
+      panel.requestContexts = ({
+        "stale-format-result": {
+          workflowGeneration: 7,
+          libraryToken: "library-b",
+          bookId: bookA.id
+        }
+      })
+      panel.handleBridgeMessage({
+        id: "stale-format-result",
+        sequence: 1,
+        type: "succeeded",
+        result: {
+          book: { id: bookA.id, title: "Changed Book A", authors: ["Author A"], formats: [{ name: "PDF" }] }
+        }
+      })
+      root.expect(panel.viewState.books.length === 1, "stale mutation inserted a different book into the current view")
+      root.expect(panel.viewState.selectedBook.id === bookB.id, "stale mutation replaced the visible selection")
+      root.expect(panel.dialogMode === "", "stale mutation reopened the format manager")
+
       root.finish()
     }
   }

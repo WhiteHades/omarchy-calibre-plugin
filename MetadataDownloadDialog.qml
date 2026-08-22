@@ -307,7 +307,7 @@ BorderSurface {
         }
       }
 
-      PanelActionButton {
+      CalibreActionButton {
         id: closeButton
         iconText: "󰅖"
         tooltipText: root.loading || root.applying ? "Cancel" : "Close"
@@ -365,7 +365,7 @@ BorderSurface {
             wrapMode: Text.WordWrap
           }
 
-          Button {
+          CalibreButton {
             text: "Fetch metadata"
             bordered: true
             focusable: true
@@ -400,7 +400,7 @@ BorderSurface {
             font.pixelSize: Style.font.caption
           }
 
-          Button {
+          CalibreButton {
             text: "Cancel"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -428,7 +428,7 @@ BorderSurface {
           Row {
             spacing: Style.space(8)
 
-            Button {
+            CalibreButton {
               text: "Retry"
               bordered: true
               focusable: true
@@ -437,7 +437,7 @@ BorderSurface {
               onClicked: root.retryRequested()
             }
 
-            Button {
+            CalibreButton {
               text: "Close"
               foreground: root.foreground
               fontFamily: root.fontFamily
@@ -465,7 +465,7 @@ BorderSurface {
             wrapMode: Text.WordWrap
           }
 
-          Button {
+          CalibreButton {
             text: "Close"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -748,7 +748,7 @@ BorderSurface {
             font.pixelSize: Style.font.caption
           }
 
-          Button {
+          CalibreButton {
             text: "Cancel"
             foreground: root.foreground
             fontFamily: root.fontFamily
@@ -776,7 +776,7 @@ BorderSurface {
         elide: Text.ElideRight
       }
 
-      Button {
+      CalibreButton {
         id: cancelButton
         text: root.loading || root.applying ? "Cancel" : "Close"
         foreground: root.foreground
@@ -785,7 +785,7 @@ BorderSurface {
         onClicked: root.dismiss()
       }
 
-      Button {
+      CalibreButton {
         id: applyButton
         visible: root.hasReview && !root.loading && !root.applying && !root.error
         text: "Apply selected"

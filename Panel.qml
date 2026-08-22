@@ -34,7 +34,10 @@ Panel {
   property string sortDirection: "ascending"
   property string filterQuery: ""
   property var confirmation: null
+  property int workflowGeneration: 0
   property int queryGeneration: 0
+  property int conversionSessionGeneration: 0
+  property string conversionRequestId: ""
   property int deviceSessionGeneration: 0
   property string deviceRequestId: ""
   property string deviceState: "probing"
@@ -43,6 +46,7 @@ Panel {
   property var deviceError: null
   property var deviceConflict: null
   property real deviceProgressFraction: 0
+  property bool deviceProgressDeterminate: false
   property string deviceProgressMessage: ""
   property int metadataSessionGeneration: 0
   property string metadataRequestId: ""
@@ -53,6 +57,9 @@ Panel {
   property string metadataError: ""
   property bool metadataLoading: false
   property bool metadataApplying: false
+  property var coverPickerContext: null
+  property var exportPickerContext: null
+  property var formatPickerContext: null
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -94,8 +101,32 @@ Panel {
   }
 
   function close() {
+    dismissWorkflow()
     setCenterHoverRevealSuppressed(false)
     root.controller.hide()
+  }
+
+  function dismissWorkflow() {
+    searchDelay.stop()
+    workflowGeneration += 1
+    if (dialogMode === "confirm") {
+      cancelConfirmation()
+      dialogMode = ""
+      return
+    }
+    if (dialogMode === "metadata-download") {
+      closeMetadataDialog()
+      return
+    }
+    if (dialogMode === "device") {
+      closeDeviceDialog()
+      return
+    }
+    if (dialogMode === "conversion") {
+      closeConversionDialog()
+      return
+    }
+    dialogMode = ""
   }
 
   function toggle() {
@@ -137,10 +168,43 @@ Panel {
   }
 
   function submit(operation, inputData, kind, context) {
-    var id = bridge.submit(operation, viewState.currentLibrary, inputData)
+    return submitForLibrary(viewState.currentLibrary, operation, inputData, kind, context)
+  }
+
+  function submitForLibrary(libraryToken, operation, inputData, kind, context) {
+    var id = bridge.submit(operation, libraryToken, inputData)
     rememberRequest(id, kind || operation, context)
     viewState = Model.beginRequest(viewState, id, kind || operation)
     return id
+  }
+
+  function beginWorkflowContext(libraryToken, bookId) {
+    workflowGeneration += 1
+    return {
+      workflowGeneration: workflowGeneration,
+      libraryToken: String(libraryToken || viewState.currentLibrary || ""),
+      bookId: bookId
+    }
+  }
+
+  function isCurrentWorkflow(context) {
+    if (!context || Number(context.workflowGeneration) !== workflowGeneration || !opened)
+      return false
+    if (String(context.libraryToken || "") !== String(viewState.currentLibrary || ""))
+      return false
+    return context.bookId === undefined || context.bookId === null
+      || (selectedBook !== null && String(context.bookId) === String(selectedBook.id))
+  }
+
+  function isCurrentBookContext(context) {
+    if (!context || context.bookId === undefined || context.bookId === null)
+      return false
+    if (String(context.libraryToken || "") !== String(viewState.currentLibrary || ""))
+      return false
+    if (context.workflowGeneration !== undefined
+        && Number(context.workflowGeneration) !== workflowGeneration)
+      return false
+    return selectedBook !== null && String(context.bookId) === String(selectedBook.id)
   }
 
   function cancelOutstandingQueries() {
@@ -187,7 +251,10 @@ Panel {
     if (extraLibrary && libraries.indexOf(extraLibrary) === -1) libraries.unshift(extraLibrary)
     var id = bridge.submit("bootstrap", "", {
       rememberedLibraries: libraries,
-      pageSize: Number(setting("pageSize", 50))
+      pageSize: Number(setting("pageSize", 50)),
+      search: Model.combineSearch(searchField.text, filterQuery),
+      sort: sortField,
+      direction: sortDirection
     })
     bootstrapRequestId = id
     rememberRequest(id, "bootstrap", { bootstrapGeneration: generation })
@@ -311,6 +378,7 @@ Panel {
       deviceError = null
       deviceConflict = null
       deviceProgressFraction = 1
+      deviceProgressDeterminate = true
       setStatus("Book sent to " + String(deviceInfo && deviceInfo.deviceName || "ebook reader") + ".", false)
     } else if (kind === "device-eject") {
       deviceState = "ejected"
@@ -388,6 +456,30 @@ Panel {
     }
   }
 
+  function isCurrentConversionRequest(context, requestId) {
+    return conversionRequestId === requestId
+      && dialogMode === "conversion"
+      && selectedBook !== null
+      && Number(context.sessionGeneration) === conversionSessionGeneration
+      && String(context.libraryToken || "") === String(viewState.currentLibrary || "")
+      && String(context.bookId || "") === String(selectedBook.id || "")
+  }
+
+  function handleConversionTerminal(event, context) {
+    var current = isCurrentConversionRequest(context, event.id)
+    if (!current) {
+      viewState = Model.forgetJob(viewState, event.id)
+      forgetRequest(event.id)
+      return
+    }
+    conversionRequestId = ""
+    conversionDialog.describing = false
+    if (event.type === "succeeded") conversionDialog.descriptor = event.result || ({})
+    else if (event.type === "failed")
+      setStatus(messageForError(event.error, "Calibre could not load conversion options."), true)
+    forgetRequest(event.id)
+  }
+
   function handleBridgeMessage(event) {
     if (!event || !event.id) return
     var kind = requestKinds[event.id] || ""
@@ -397,8 +489,11 @@ Panel {
       if (event.type === "progress" && isDeviceRequest(kind)
           && isCurrentDeviceRequest(context, event.id)) {
         var progress = event.progress || ({})
-        if (isFinite(Number(progress.fraction)))
+        if (progress.fraction !== undefined && progress.fraction !== null
+            && isFinite(Number(progress.fraction))) {
           deviceProgressFraction = Math.max(0, Math.min(1, Number(progress.fraction)))
+          deviceProgressDeterminate = true
+        }
         if (progress.message) deviceProgressMessage = String(progress.message)
       }
       return
@@ -416,6 +511,19 @@ Panel {
       return
     }
     if (kind === "bootstrap") bootstrapRequestId = ""
+
+    if (kind.indexOf("prepare-") === 0 && !isCurrentWorkflow(context)) {
+      if (event.type === "succeeded" && event.result && event.result.confirmationToken)
+        discardConfirmationToken(event.result.confirmationToken, context.libraryToken)
+      viewState = Model.forgetJob(viewState, event.id)
+      forgetRequest(event.id)
+      return
+    }
+
+    if (kind === "conversion-describe") {
+      handleConversionTerminal(event, context)
+      return
+    }
 
     if (isDeviceRequest(kind)) {
       handleDeviceTerminal(event, kind, context)
@@ -443,14 +551,14 @@ Panel {
       var errorCode = event.error && event.error.code ? String(event.error.code) : ""
       if (kind === "export" && errorCode === "confirmation_required") {
         forgetRequest(event.id)
-        submit("action.prepare", {
+        if (!isCurrentWorkflow(context)) return
+        submitForLibrary(context.libraryToken, "action.prepare", {
           name: "book.export.replace",
           bookIds: context.bookIds,
           destination: context.destination
-        }, "prepare-export")
+        }, "prepare-export", context)
         return
       }
-      if (kind === "conversion-describe") conversionDialog.describing = false
       setStatus(event.error && event.error.message
         ? String(event.error.message)
         : "The Calibre operation failed.", true)
@@ -468,21 +576,23 @@ Panel {
     } else if (kind === "query" || kind === "query-append") {
       viewState = Model.applyQuery(viewState, result, kind === "query-append")
       if (kind === "query") bookIndex = 0
-    } else if (kind === "conversion-describe") {
-      conversionDialog.descriptor = result
-      conversionDialog.describing = false
     } else if (kind.indexOf("prepare-") === 0) {
-      presentConfirmation(kind, result)
+      presentConfirmation(kind, result, context)
     } else if (result.book) {
-      viewState = Model.applyBook(viewState, result.book)
-      if (kind === "metadata") setStatus("Metadata saved.", false)
-      else if (kind === "cover") setStatus("Cover saved.", false)
-      else if (kind === "format-add") setStatus("Format added.", false)
-      else if (kind === "commit-format-replace") setStatus("Format replaced.", false)
-      else if (kind === "commit-format-remove") setStatus("Format removed.", false)
-      else if (kind === "convert" || kind === "commit-convert")
-        setStatus("Created " + String(result.outputFormat || "the requested") + " format.", false)
-      if (kind === "format-add" || kind.indexOf("commit-format-") === 0) dialogMode = "formats"
+      var currentBookContext = isCurrentBookContext(context)
+      if (currentBookContext) viewState = Model.applyBook(viewState, result.book)
+      if (currentBookContext) {
+        if (kind === "metadata") setStatus("Metadata saved.", false)
+        else if (kind === "cover") setStatus("Cover saved.", false)
+        else if (kind === "format-add") setStatus("Format added.", false)
+        else if (kind === "commit-format-replace") setStatus("Format replaced.", false)
+        else if (kind === "commit-format-remove") setStatus("Format removed.", false)
+        else if (kind === "convert" || kind === "commit-convert")
+          setStatus("Created " + String(result.outputFormat || "the requested") + " format.", false)
+      }
+      if (currentBookContext && opened
+          && (kind === "format-add" || kind.indexOf("commit-format-") === 0))
+        dialogMode = "formats"
     } else if (kind === "import") {
       var added = result.addedIds instanceof Array ? result.addedIds.length : 0
       setStatus(added > 0 ? added + (added === 1 ? " book added." : " books added.") : "No new books were added.", false)
@@ -499,7 +609,7 @@ Panel {
     forgetRequest(event.id)
   }
 
-  function presentConfirmation(kind, result) {
+  function presentConfirmation(kind, result, context) {
     var options = {
       "prepare-remove": {
         title: "Remove from library",
@@ -541,10 +651,17 @@ Panel {
       setStatus("Calibre returned an invalid confirmation.", true)
       return
     }
+    if (!isCurrentWorkflow(context)) {
+      discardConfirmationToken(result.confirmationToken, context.libraryToken)
+      return
+    }
     var next = {}
     for (var key in options) next[key] = options[key]
     next.token = result.confirmationToken
     next.body = result.summary || "Confirm this Calibre action."
+    next.workflowGeneration = context.workflowGeneration
+    next.libraryToken = context.libraryToken
+    next.bookId = context.bookId
     confirmation = next
     dialogMode = "confirm"
   }
@@ -554,7 +671,26 @@ Panel {
     var pending = confirmation
     confirmation = null
     dialogMode = ""
-    submit("action.commit", { confirmationToken: pending.token }, pending.commitKind)
+    if (!isCurrentWorkflow(pending)) {
+      discardConfirmationToken(pending.token, pending.libraryToken)
+      return
+    }
+    submitForLibrary(pending.libraryToken, "action.commit", {
+      confirmationToken: pending.token
+    }, pending.commitKind, {
+      workflowGeneration: pending.workflowGeneration,
+      libraryToken: pending.libraryToken,
+      bookId: pending.bookId
+    })
+  }
+
+  function discardConfirmationToken(token, libraryToken) {
+    var value = String(token || "")
+    if (!value) return
+    var id = bridge.submit("action.discard", String(libraryToken || viewState.currentLibrary || ""), {
+      confirmationToken: value
+    })
+    rememberRequest(id, "discard-confirmation")
   }
 
   function cancelConfirmation() {
@@ -562,12 +698,9 @@ Panel {
     var returnMode = pending && pending.returnMode ? pending.returnMode : ""
     confirmation = null
     dialogMode = returnMode
-    if (pending && pending.token) {
-      var id = bridge.submit("action.discard", viewState.currentLibrary, {
-        confirmationToken: pending.token
-      })
-      rememberRequest(id, "discard-confirmation")
-    }
+    workflowGeneration += 1
+    if (pending && pending.token)
+      discardConfirmationToken(pending.token, pending.libraryToken)
   }
 
   function cancelJob(requestId) {
@@ -628,6 +761,7 @@ Panel {
 
   function switchLibrary(token) {
     if (!token || token === viewState.currentLibrary) return
+    workflowGeneration += 1
     viewState = Model.selectLibrary(viewState, token)
     bookIndex = 0
     search()
@@ -635,8 +769,11 @@ Panel {
 
   function selectBook(index) {
     if (index < 0 || index >= viewState.books.length) return
+    var nextBook = viewState.books[index]
+    if (!selectedBook || String(selectedBook.id) !== String(nextBook.id))
+      workflowGeneration += 1
     bookIndex = index
-    viewState = Model.selectBook(viewState, viewState.books[index].id)
+    viewState = Model.selectBook(viewState, nextBook.id)
   }
 
   function moveCursor(dx, dy) {
@@ -668,22 +805,20 @@ Panel {
       dialogMode = "metadata"
     }
     else if (actionId === "device") openDeviceDialog()
-    else if (actionId === "convert") {
-      conversionDialog.descriptor = null
-      conversionDialog.describing = false
-      conversionDialog.initialize()
-      dialogMode = "conversion"
-    }
-    else if (actionId === "export" && !exportFolder.running) exportFolder.running = true
+    else if (actionId === "convert") openConversionDialog()
+    else if (actionId === "export") openExportPicker()
   }
 
   function runSecondaryAction(actionId) {
     if (!selectedBook) return
     if (actionId === "formats") dialogMode = "formats"
-    else if (actionId === "remove") submit("action.prepare", {
-      name: "book.remove",
-      bookIds: [selectedBook.id]
-    }, "prepare-remove")
+    else if (actionId === "remove") {
+      var context = beginWorkflowContext(viewState.currentLibrary, selectedBook.id)
+      submit("action.prepare", {
+        name: "book.remove",
+        bookIds: [selectedBook.id]
+      }, "prepare-remove", context)
+    }
   }
 
   function commandList() {
@@ -755,27 +890,63 @@ Panel {
 
   function describeConversion(inputFormat, outputFormat) {
     if (!selectedBook) return
+    if (conversionRequestId) bridge.cancel(conversionRequestId)
+    conversionSessionGeneration += 1
+    var generation = conversionSessionGeneration
     conversionDialog.describing = true
     conversionDialog.descriptor = null
-    submit("conversion.describe", {
+    conversionRequestId = submit("conversion.describe", {
       bookId: selectedBook.id,
       inputFormat: inputFormat,
       outputFormat: outputFormat
-    }, "conversion-describe")
+    }, "conversion-describe", {
+      sessionGeneration: generation,
+      libraryToken: viewState.currentLibrary,
+      bookId: selectedBook.id
+    })
+  }
+
+  function openConversionDialog() {
+    if (!selectedBook) return
+    closeConversionDialog()
+    conversionSessionGeneration += 1
+    conversionDialog.descriptor = null
+    conversionDialog.describing = false
+    conversionDialog.initialize()
+    dialogMode = "conversion"
+  }
+
+  function closeConversionDialog() {
+    var requestId = conversionRequestId
+    conversionRequestId = ""
+    conversionSessionGeneration += 1
+    if (requestId) bridge.cancel(requestId)
+    conversionDialog.describing = false
+    conversionDialog.descriptor = null
+    dialogMode = ""
   }
 
   function convertBook(inputFormat, outputFormat, options, replacesFormat) {
     if (!selectedBook) return
+    var libraryToken = viewState.currentLibrary
+    var bookId = selectedBook.id
+    if (conversionRequestId) bridge.cancel(conversionRequestId)
+    conversionRequestId = ""
+    conversionSessionGeneration += 1
     dialogMode = ""
     var inputData = {
       name: replacesFormat ? "book.convert.replace" : "book.convert.quick",
-      bookId: selectedBook.id,
+      bookId: bookId,
       inputFormat: inputFormat,
       outputFormat: outputFormat,
       options: options || ({})
     }
-    if (replacesFormat) submit("action.prepare", inputData, "prepare-convert")
-    else submit("action.run", inputData, "convert")
+    var context = beginWorkflowContext(libraryToken, bookId)
+    if (replacesFormat) {
+      submitForLibrary(libraryToken, "action.prepare", inputData, "prepare-convert", context)
+    } else {
+      submitForLibrary(libraryToken, "action.run", inputData, "convert", context)
+    }
   }
 
   function formatNameForPath(path) {
@@ -793,36 +964,49 @@ Panel {
     return false
   }
 
-  function addFormatPath(rawPath) {
+  function addFormatPath(rawPath, pickerContext) {
     var path = String(rawPath || "").trim()
-    if (!path || !selectedBook) return
-    var replacement = hasFormat(formatNameForPath(path))
+    var snapshot = pickerContext || ({})
+    var book = snapshot.book || selectedBook
+    var libraryToken = String(snapshot.libraryToken || viewState.currentLibrary || "")
+    if (!path || !book || !libraryToken) return
+    var formats = book.formats instanceof Array ? book.formats : []
+    var formatName = formatNameForPath(path)
+    var replacement = formats.some(function(format) {
+      return String(format.name || "").toUpperCase() === formatName
+    })
     var inputData = {
       name: replacement ? "format.replace" : "format.add",
-      bookId: selectedBook.id,
+      bookId: book.id,
       path: path
     }
-    if (replacement) submit("action.prepare", inputData, "prepare-format-replace")
-    else submit("action.run", inputData, "format-add")
+    var context = beginWorkflowContext(libraryToken, book.id)
+    if (replacement)
+      submitForLibrary(libraryToken, "action.prepare", inputData, "prepare-format-replace", context)
+    else submitForLibrary(libraryToken, "action.run", inputData, "format-add", context)
   }
 
   function removeFormat(format) {
     if (!selectedBook || !format || !format.name) return
+    var context = beginWorkflowContext(viewState.currentLibrary, selectedBook.id)
     submit("action.prepare", {
       name: "format.remove",
       bookId: selectedBook.id,
       format: String(format.name)
-    }, "prepare-format-remove")
+    }, "prepare-format-remove", context)
   }
 
   function setMetadata(fields) {
     if (!selectedBook) return
+    var libraryToken = viewState.currentLibrary
+    var bookId = selectedBook.id
+    var context = beginWorkflowContext(libraryToken, bookId)
     dialogMode = ""
-    submit("action.run", {
+    submitForLibrary(libraryToken, "action.run", {
       name: "book.metadata.update",
-      bookId: selectedBook.id,
+      bookId: bookId,
       fields: fields
-    }, "metadata")
+    }, "metadata", context)
   }
 
   function discardMetadataToken(value, libraryToken) {
@@ -925,6 +1109,7 @@ Panel {
     deviceInfo = null
     deviceError = null
     deviceProgressFraction = 0
+    deviceProgressDeterminate = false
     deviceProgressMessage = ""
     probeReader()
   }
@@ -934,6 +1119,7 @@ Panel {
     deviceState = "probing"
     deviceError = null
     deviceProgressFraction = 0
+    deviceProgressDeterminate = false
     deviceProgressMessage = ""
     deviceRequestId = submit("device.probe", {}, "device-probe", {
       sessionGeneration: deviceSessionGeneration,
@@ -968,6 +1154,7 @@ Panel {
     deviceState = "sending"
     deviceError = null
     deviceProgressFraction = 0
+    deviceProgressDeterminate = false
     deviceProgressMessage = ""
     var requestContext = {
       sessionGeneration: deviceSessionGeneration,
@@ -1004,6 +1191,7 @@ Panel {
     deviceState = "ejecting"
     deviceError = null
     deviceProgressFraction = 0
+    deviceProgressDeterminate = false
     deviceProgressMessage = ""
     deviceRequestId = submit("device.eject", {}, "device-eject", {
       sessionGeneration: deviceSessionGeneration,
@@ -1044,6 +1232,35 @@ Panel {
 
   function fileUrl(path) {
     return path ? encodeURI("file://" + String(path)) : ""
+  }
+
+  function openCoverPicker() {
+    if (!selectedBook || coverFile.running) return
+    coverPickerContext = {
+      workflowGeneration: workflowGeneration,
+      libraryToken: viewState.currentLibrary,
+      bookId: selectedBook.id
+    }
+    coverFile.running = true
+  }
+
+  function openExportPicker() {
+    if (!selectedBook || exportFolder.running) return
+    exportPickerContext = {
+      libraryToken: viewState.currentLibrary,
+      bookId: selectedBook.id
+    }
+    exportFolder.running = true
+  }
+
+  function openFormatPicker() {
+    if (!selectedBook || formatFile.running) return
+    formatPickerContext = {
+      libraryToken: viewState.currentLibrary,
+      bookId: selectedBook.id,
+      book: selectedBook
+    }
+    formatFile.running = true
   }
 
   function scrollSelectedIntoView() {
@@ -1116,6 +1333,14 @@ Panel {
     onTriggered: root.search()
   }
 
+  Shortcut {
+    sequence: "Escape"
+    context: Qt.WindowShortcut
+    enabled: root.opened && root.dialogMode === "" && !searchField.activeFocus
+      && !libraryDropdown.popupOpen && !sortDropdown.popupOpen && !filterDropdown.popupOpen
+    onActivated: root.close()
+  }
+
   Process {
     id: chooseLibrary
     running: false
@@ -1166,12 +1391,17 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var path = String(text || "").trim()
-        if (!path || !root.selectedBook) return
-        root.submit("action.run", {
+        if (!path || !root.coverPickerContext) {
+          root.coverPickerContext = null
+          return
+        }
+        var picker = root.coverPickerContext
+        root.submitForLibrary(picker.libraryToken, "action.run", {
           name: "book.cover.set",
-          bookId: root.selectedBook.id,
+          bookId: root.coverPickerContext.bookId,
           path: path
-        }, "cover")
+        }, "cover", picker)
+        root.coverPickerContext = null
       }
     }
   }
@@ -1184,13 +1414,21 @@ Panel {
       waitForEnd: true
       onStreamFinished: {
         var path = String(text || "").trim()
-        if (!path || !root.selectedBook) return
+        if (!path || !root.exportPickerContext) {
+          root.exportPickerContext = null
+          return
+        }
+        var picker = root.exportPickerContext
+        var context = root.beginWorkflowContext(picker.libraryToken, picker.bookId)
+        context.bookIds = [picker.bookId]
+        context.destination = path
         var request = {
           name: "book.export",
-          bookIds: [root.selectedBook.id],
+          bookIds: [root.exportPickerContext.bookId],
           destination: path
         }
-        root.submit("action.run", request, "export", request)
+        root.submitForLibrary(picker.libraryToken, "action.run", request, "export", context)
+        root.exportPickerContext = null
       }
     }
   }
@@ -1205,7 +1443,10 @@ Panel {
     ]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.addFormatPath(text)
+      onStreamFinished: {
+        root.addFormatPath(text, root.formatPickerContext)
+        root.formatPickerContext = null
+      }
     }
   }
 
@@ -1223,13 +1464,17 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      blocked: root.dialogMode !== "" || searchField.activeFocus
+      blocked: root.viewState.mode !== "library" || root.dialogMode !== "" || searchField.activeFocus
         || libraryDropdown.popupOpen || sortDropdown.popupOpen || filterDropdown.popupOpen
+        || !keyCatcher.activeFocus
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
       onDeleteRequested: root.runSecondaryAction("remove")
-      onTabRequested: function(direction) { root.switchPanel(direction) }
+      onTabRequested: function(direction) {
+        if (direction < 0) addBooksButton.forceActiveFocus()
+        else searchField.forceActiveFocus()
+      }
       onTextKey: function(text) {
         if (text === "/") {
           searchField.forceActiveFocus()
@@ -1287,14 +1532,15 @@ Panel {
             wrapMode: Text.WordWrap
           }
 
-          Row {
-            anchors.horizontalCenter: parent.horizontalCenter
+          Flow {
+            width: parent.width
+            height: implicitHeight
             spacing: Style.space(8)
 
             Repeater {
               model: root.viewState.mode === "loading" ? [] : root.setup.actions
 
-              Button {
+              CalibreButton {
                 required property var modelData
                 text: modelData.label
                 bordered: true
@@ -1339,12 +1585,13 @@ Panel {
 
             Column {
               id: libraryControl
-              width: Style.space(145)
+              width: Math.min(Style.space(145), toolbar.width)
               spacing: Style.space(2)
 
-              Dropdown {
+              CalibreDropdown {
                 id: libraryDropdown
                 width: parent.width
+                accessibleName: "Calibre library"
                 showLabel: false
                 options: root.libraryOptions()
                 value: root.viewState.currentLibrary
@@ -1365,9 +1612,10 @@ Panel {
               }
             }
 
-            Dropdown {
+            CalibreDropdown {
               id: sortDropdown
-              width: Style.space(105)
+              width: Math.min(Style.space(105), toolbar.width)
+              accessibleName: "Sort books"
               showLabel: false
               options: [
                 { value: "title", label: "Title" },
@@ -1386,7 +1634,7 @@ Panel {
               }
             }
 
-            Button {
+            CalibreButton {
               id: sortDirectionButton
               text: root.sortDirection === "ascending" ? "↑" : "↓"
               tooltipText: root.sortDirection === "ascending" ? "Ascending" : "Descending"
@@ -1398,9 +1646,10 @@ Panel {
               }
             }
 
-            TextField {
+            CalibreTextField {
               id: searchField
               width: Math.min(Style.space(180), toolbar.width)
+              accessibleName: "Search library"
               placeholderText: "Search library  /"
               foreground: root.foreground
               onTextChanged: searchDelay.restart()
@@ -1414,9 +1663,10 @@ Panel {
               }
             }
 
-            Dropdown {
+            CalibreDropdown {
               id: filterDropdown
-              width: Style.space(110)
+              width: Math.min(Style.space(110), toolbar.width)
+              accessibleName: "Filter books"
               showLabel: false
               options: [
                 { value: "", label: "All books" },
@@ -1436,7 +1686,7 @@ Panel {
               }
             }
 
-            Button {
+            CalibreButton {
               text: "Library"
               tooltipText: "Add another Calibre library"
               foreground: root.foreground
@@ -1444,7 +1694,7 @@ Panel {
               onClicked: if (!chooseLibrary.running) chooseLibrary.running = true
             }
 
-            Button {
+            CalibreButton {
               visible: root.jobs.length > 0
               text: root.activeJobCount > 0 ? "Jobs " + root.activeJobCount : "Jobs"
               tooltipText: "Show Calibre jobs"
@@ -1453,7 +1703,7 @@ Panel {
               onClicked: root.dialogMode = "jobs"
             }
 
-            Button {
+            CalibreButton {
               id: addBooksButton
               text: "Add books"
               iconText: "+"
@@ -1487,14 +1737,25 @@ Panel {
             }
           }
 
-          Row {
+          Grid {
+            id: libraryPanes
+            readonly property bool stacked: width < Style.space(640)
+            readonly property real availableWidth: Math.max(0,
+              width - paneSeparator.width - (stacked ? 0 : columnSpacing * 2))
+            readonly property real availableHeight: Math.max(0,
+              height - paneSeparator.height - (stacked ? rowSpacing * 2 : 0))
             width: parent.width
             height: Math.max(0, libraryColumn.height - y)
-            spacing: Style.space(12)
+            columns: stacked ? 1 : 3
+            columnSpacing: stacked ? 0 : Style.space(12)
+            rowSpacing: stacked ? Style.space(8) : 0
 
             Column {
-              width: Math.floor((parent.width - parent.spacing) * 0.47)
-              height: parent.height
+              id: cataloguePane
+              width: libraryPanes.stacked ? libraryPanes.width
+                : Math.floor(libraryPanes.availableWidth * 0.47)
+              height: libraryPanes.stacked ? Math.floor(libraryPanes.availableHeight * 0.44)
+                : libraryPanes.height
               spacing: Style.space(6)
 
               PanelSectionHeader {
@@ -1532,6 +1793,10 @@ Panel {
                       current: root.selectedBook && String(root.selectedBook.id) === String(modelData.id)
                       hasCursor: root.cursorActive && root.focusSection === "books" && root.bookIndex === index
                       foreground: root.foreground
+                      Accessible.role: Accessible.ListItem
+                      Accessible.name: String(modelData.title || "Untitled") + ", " + root.authors(modelData)
+                      Accessible.selected: current
+                      Accessible.onPressAction: root.selectBook(index)
 
                       Column {
                         id: bookRow
@@ -1588,7 +1853,7 @@ Panel {
                     }
                   }
 
-                  Button {
+                  CalibreButton {
                     visible: root.viewState.nextCursor !== null
                     width: parent.width
                     text: "Load more"
@@ -1602,13 +1867,17 @@ Panel {
             }
 
             PanelSeparator {
-              width: Style.normalBorderWidth
-              height: parent.height
+              id: paneSeparator
+              width: libraryPanes.stacked ? libraryPanes.width : Style.normalBorderWidth
+              height: libraryPanes.stacked ? Style.normalBorderWidth : libraryPanes.height
             }
 
             Flickable {
-              width: Math.max(0, parent.width - x)
-              height: parent.height
+              width: libraryPanes.stacked ? libraryPanes.width
+                : Math.max(0, libraryPanes.availableWidth - cataloguePane.width)
+              height: libraryPanes.stacked
+                ? Math.max(0, libraryPanes.availableHeight - cataloguePane.height)
+                : libraryPanes.height
               contentWidth: width
               contentHeight: inspector.implicitHeight
               clip: true
@@ -1741,7 +2010,7 @@ Panel {
                   Repeater {
                     model: root.primaryActions
 
-                    Button {
+                    CalibreButton {
                       required property var modelData
                       required property int index
                       width: parent.width
@@ -1777,7 +2046,7 @@ Panel {
                   Repeater {
                     model: root.secondaryActions
 
-                    Button {
+                    CalibreButton {
                       required property var modelData
                       width: (parent.width - parent.spacing) / 2
                       text: modelData.label
@@ -1826,7 +2095,7 @@ Panel {
           fontFamily: root.fontFamily
           downloadAvailable: root.hasCapability("book.metadata.fetch")
           onSaved: function(fields) { root.setMetadata(fields) }
-          onCoverRequested: if (!coverFile.running) coverFile.running = true
+          onCoverRequested: root.openCoverPicker()
           onDownloadRequested: root.openMetadataDownload()
           onCanceled: root.dialogMode = ""
         }
@@ -1847,7 +2116,7 @@ Panel {
           onConversionRequested: function(inputFormat, outputFormat, options, replacesFormat) {
             root.convertBook(inputFormat, outputFormat, options, replacesFormat)
           }
-          onCanceled: root.dialogMode = ""
+          onCanceled: root.closeConversionDialog()
         }
 
         FormatManager {
@@ -1859,7 +2128,7 @@ Panel {
           urgent: root.urgent
           fontFamily: root.fontFamily
           onOpenRequested: function(format) { root.openFormat(format) }
-          onAddRequested: if (!formatFile.running) formatFile.running = true
+          onAddRequested: root.openFormatPicker()
           onRemoveRequested: function(format) { root.removeFormat(format) }
           onCanceled: root.dialogMode = ""
         }
@@ -1900,6 +2169,7 @@ Panel {
           conflictFormat: root.deviceConflict ? String(root.deviceConflict.format || "") : ""
           deviceCapabilities: root.viewState.capabilities.device || ({})
           progressFraction: root.deviceProgressFraction
+          progressDeterminate: root.deviceProgressDeterminate
           progressMessage: root.deviceProgressMessage
           foreground: root.foreground
           urgent: root.urgent
@@ -1954,9 +2224,11 @@ Panel {
           opened: root.dialogMode === "confirm"
           anchors.fill: parent
           z: 11
-          title: root.confirmation ? root.confirmation.title : "Confirm action"
-          body: root.confirmation ? root.confirmation.body : ""
-          confirmLabel: root.confirmation ? root.confirmation.confirmLabel : "Continue"
+          title: root.confirmation && root.confirmation.title
+            ? String(root.confirmation.title) : "Confirm action"
+          body: root.confirmation && root.confirmation.body ? String(root.confirmation.body) : ""
+          confirmLabel: root.confirmation && root.confirmation.confirmLabel
+            ? String(root.confirmation.confirmLabel) : "Continue"
           foreground: root.foreground
           fontFamily: root.fontFamily
           onConfirmed: root.commitConfirmation()

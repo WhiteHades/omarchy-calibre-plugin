@@ -66,7 +66,7 @@ BorderSurface {
         }
       }
 
-      PanelActionButton {
+      CalibreActionButton {
         id: closeButton
         iconText: "󰅖"
         tooltipText: "Close"
@@ -148,7 +148,7 @@ BorderSurface {
                 }
               }
 
-              Button {
+              CalibreButton {
                 id: openButton
                 text: "Open"
                 foreground: root.foreground
@@ -156,7 +156,7 @@ BorderSurface {
                 onClicked: root.openRequested(formatRow.modelData)
               }
 
-              Button {
+              CalibreButton {
                 id: removeButton
                 text: "Remove"
                 foreground: root.urgent
@@ -180,7 +180,7 @@ BorderSurface {
       }
     }
 
-    Button {
+    CalibreButton {
       id: addButton
       width: parent.width
       text: "Add or replace a format"

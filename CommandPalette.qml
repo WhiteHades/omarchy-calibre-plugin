@@ -86,9 +86,10 @@ BorderSurface {
       }
     }
 
-    TextField {
+    CalibreTextField {
       id: filterField
       width: parent.width
+      accessibleName: "Find a command"
       placeholderText: "Find a command"
       foreground: root.foreground
       onTextChanged: root.filterCommands()
@@ -130,6 +131,13 @@ BorderSurface {
         current: index === root.selectedIndex
         hasCursor: current
         foreground: root.foreground
+        Accessible.role: Accessible.ListItem
+        Accessible.name: String(commandRow.modelData.label || "")
+        Accessible.selected: current
+        Accessible.onPressAction: {
+          root.selectedIndex = commandRow.index
+          root.executeSelected()
+        }
 
         Row {
           anchors.fill: parent

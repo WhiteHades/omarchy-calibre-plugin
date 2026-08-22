@@ -18,6 +18,7 @@ BorderSurface {
   property var deviceError: null
   property var deviceCapabilities: ({})
   property real progressFraction: 0
+  property bool progressDeterminate: false
   property string progressMessage: ""
   property color foreground: Color.foreground
   property color urgent: Color.urgent
@@ -208,7 +209,7 @@ BorderSurface {
         }
       }
 
-      PanelActionButton {
+      CalibreActionButton {
         id: closeButton
         iconText: root.sending ? "󰅖" : "󰅖"
         tooltipText: root.sending ? "Cancel sending" : "Close"
@@ -284,7 +285,7 @@ BorderSurface {
             elide: Text.ElideRight
           }
 
-          Dropdown {
+          CalibreDropdown {
             visible: root.normalizedState === "ready" || root.normalizedState === "sending"
               || root.normalizedState === "conflict"
             width: parent.width
@@ -310,6 +311,7 @@ BorderSurface {
           }
 
           BorderSurface {
+            id: progressTrack
             visible: root.normalizedState === "sending" || root.normalizedState === "ejecting"
             width: parent.width
             height: Style.space(5)
@@ -318,10 +320,35 @@ BorderSurface {
             radius: Style.cornerRadius
 
             Rectangle {
-              width: parent.width * Math.max(0.03, Math.min(1, Number(root.progressFraction || 0)))
+              id: progressIndicator
+              width: root.progressDeterminate
+                ? parent.width * Math.max(0, Math.min(1, Number(root.progressFraction || 0)))
+                : Math.min(parent.width, Style.space(72))
+              x: 0
               height: parent.height
               color: Color.accent
               radius: parent.radius
+
+              SequentialAnimation {
+                running: progressTrack.visible && !root.progressDeterminate
+                loops: Animation.Infinite
+                NumberAnimation {
+                  target: progressIndicator
+                  property: "x"
+                  from: 0
+                  to: Math.max(0, progressTrack.width - progressIndicator.width)
+                  duration: 850
+                  easing.type: Easing.InOutQuad
+                }
+                NumberAnimation {
+                  target: progressIndicator
+                  property: "x"
+                  from: Math.max(0, progressTrack.width - progressIndicator.width)
+                  to: 0
+                  duration: 850
+                  easing.type: Easing.InOutQuad
+                }
+              }
             }
           }
 
@@ -339,24 +366,25 @@ BorderSurface {
       }
     }
 
-    Row {
+    Flow {
       id: footer
       width: parent.width
+      height: implicitHeight
       spacing: Style.space(8)
 
       Text {
         textFormat: Text.PlainText
-        width: Math.max(0, parent.width - cancelButton.width - retryButton.width - ejectButton.width - sendButton.width - parent.spacing * 4)
+        visible: root.normalizedState === "sending" || root.normalizedState === "ejecting"
+        width: parent.width
         text: root.normalizedState === "sending" || root.normalizedState === "ejecting"
           ? (root.progressMessage || "Working…") : ""
         color: Qt.darker(root.foreground, 1.45)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
-        anchors.verticalCenter: parent.verticalCenter
         elide: Text.ElideRight
       }
 
-      Button {
+      CalibreButton {
         id: cancelButton
         text: root.sending ? "Cancel" : "Close"
         foreground: root.foreground
@@ -365,7 +393,7 @@ BorderSurface {
         onClicked: root.sending ? root.cancelRequested() : root.canceled()
       }
 
-      Button {
+      CalibreButton {
         id: retryButton
         visible: root.retryableState
         text: "Retry"
@@ -376,7 +404,7 @@ BorderSurface {
         onClicked: root.retryRequested()
       }
 
-      Button {
+      CalibreButton {
         id: ejectButton
         visible: root.ejectAvailable && (root.normalizedState === "ready"
           || root.normalizedState === "sent" || root.normalizedState === "conflict")
@@ -387,7 +415,7 @@ BorderSurface {
         onClicked: root.ejectRequested()
       }
 
-      Button {
+      CalibreButton {
         id: sendButton
         visible: root.sendAvailable && root.formatAvailable
           && (root.normalizedState === "ready" || root.normalizedState === "sent"

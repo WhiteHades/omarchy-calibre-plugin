@@ -24,9 +24,10 @@ Column {
     elide: Text.ElideRight
   }
 
-  TextField {
+  CalibreTextField {
     id: field
     width: parent.width
+    accessibleName: root.label
     foreground: root.foreground
   }
 }

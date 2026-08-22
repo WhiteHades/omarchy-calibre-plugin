@@ -265,6 +265,7 @@ function beginRequest(state, requestId, label) {
     state: "running",
     sequence: 0,
     fraction: 0,
+    determinate: false,
     message: "",
     order: maxOrder + 1
   }
@@ -325,13 +326,16 @@ function applyBridgeEvent(state, event) {
 
   if (event.type === "progress") {
     job.state = "running"
-    job.fraction = event.progress && isFinite(Number(event.progress.fraction))
-      ? Math.max(0, Math.min(1, Number(event.progress.fraction)))
-      : job.fraction
+    if (event.progress && event.progress.fraction !== undefined
+        && event.progress.fraction !== null && isFinite(Number(event.progress.fraction))) {
+      job.fraction = Math.max(0, Math.min(1, Number(event.progress.fraction)))
+      job.determinate = true
+    }
     job.message = event.progress && event.progress.message ? event.progress.message : ""
   } else if (event.type === "succeeded") {
     job.state = "succeeded"
     job.fraction = 1
+    job.determinate = true
     job.result = event.result
   } else if (event.type === "failed") {
     job.state = "failed"

@@ -118,13 +118,13 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn('Quickshell.execDetached(["xdg-open", path])', panel)
         self.assertNotIn('Quickshell.execDetached(["bash"', panel)
 
-    def test_toolbar_wraps_without_collapsing_the_two_pane_layout(self) -> None:
+    def test_toolbar_wraps_and_the_catalogue_keeps_a_native_two_pane_layout(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
 
         self.assertIn("Flow {\n            id: toolbar", panel)
         self.assertIn("height: implicitHeight", panel)
         self.assertRegex(panel, r'PanelSectionHeader\s*\{\s*text: "CATALOGUE"')
-        self.assertIn("width: Math.floor((parent.width - parent.spacing) * 0.47)", panel)
+        self.assertIn("Math.floor(libraryPanes.availableWidth * 0.47)", panel)
 
     def test_job_cancellation_stays_inside_the_bridge_protocol(self) -> None:
         bridge = (ROOT / "CalibreBridge.qml").read_text()
@@ -171,6 +171,132 @@ class PluginContractTest(unittest.TestCase):
         self.assertRegex(panel, r"function\s+setCenterHoverRevealSuppressed\s*\(")
         self.assertIn("setCenterHoverRevealSuppressed(false)", panel)
         self.assertIn("setCenterHoverRevealSuppressed(true)", panel)
+
+    def test_panel_lifecycle_is_local_but_refresh_reaches_peer_monitors(self) -> None:
+        widget = (ROOT / "BarWidget.qml").read_text()
+
+        self.assertIn("function open(): void { root.open() }", widget)
+        self.assertIn("function close(): void { root.close() }", widget)
+        self.assertIn("function toggle(): void { root.togglePanel() }", widget)
+        self.assertIn('function refresh(): void { root.broadcast("refresh") }', widget)
+        self.assertNotIn('root.broadcast("open")', widget)
+        self.assertNotIn('root.broadcast("close")', widget)
+        self.assertNotIn('root.broadcast("togglePanel")', widget)
+
+    def test_panel_close_dismisses_and_cleans_the_open_workflow(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertRegex(panel, r"function\s+dismissWorkflow\s*\(")
+        close_body = panel[panel.index("function close()") : panel.index("function toggle()")]
+        self.assertIn("dismissWorkflow()", close_body)
+        self.assertIn("closeMetadataDialog()", panel)
+        self.assertIn("closeDeviceDialog()", panel)
+        self.assertIn("cancelConfirmation()", panel)
+
+    def test_destructive_preparations_are_bound_to_the_visible_selection(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("property int workflowGeneration:", panel)
+        self.assertRegex(panel, r"function\s+beginWorkflowContext\s*\(")
+        self.assertRegex(panel, r"function\s+isCurrentWorkflow\s*\(")
+        self.assertIn("discardConfirmationToken", panel)
+        self.assertIn("context.workflowGeneration", panel)
+
+    def test_book_mutation_results_cannot_retarget_the_visible_selection(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertRegex(panel, r"function\s+isCurrentBookContext\s*\(")
+        self.assertIn("workflowGeneration: pending.workflowGeneration", panel)
+        self.assertIn("var currentBookContext = isCurrentBookContext(context)", panel)
+        self.assertIn("if (currentBookContext) viewState = Model.applyBook", panel)
+        self.assertIn("if (currentBookContext && opened", panel)
+
+    def test_calibre_actions_share_keyboard_and_accessibility_defaults(self) -> None:
+        button = (ROOT / "CalibreButton.qml").read_text()
+        action_button = (ROOT / "CalibreActionButton.qml").read_text()
+        panel = (ROOT / "Panel.qml").read_text()
+        palette = (ROOT / "CommandPalette.qml").read_text()
+
+        for source in (button, action_button):
+            self.assertIn("focusable: true", source)
+            self.assertIn("Accessible.role: Accessible.Button", source)
+            self.assertIn("Accessible.name:", source)
+            self.assertIn("Accessible.onPressAction:", source)
+        self.assertIn("Accessible.role: Accessible.ListItem", panel)
+        self.assertIn("Accessible.role: Accessible.ListItem", palette)
+        self.assertIn('root.viewState.mode !== "library"', panel)
+        self.assertIn("!keyCatcher.activeFocus", panel)
+        self.assertIn("searchField.forceActiveFocus()", panel)
+
+    def test_conversion_options_are_bound_to_one_dialog_session(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+        dialog = (ROOT / "ConversionDialog.qml").read_text()
+
+        self.assertIn("property int conversionSessionGeneration:", panel)
+        self.assertIn("property string conversionRequestId:", panel)
+        self.assertRegex(panel, r"function\s+closeConversionDialog\s*\(")
+        self.assertIn("isCurrentConversionRequest", panel)
+        self.assertIn("onCanceled: root.closeConversionDialog()", panel)
+        self.assertIn("focus: visible", dialog)
+        self.assertIn("root.forceActiveFocus()", dialog)
+
+    def test_file_picker_actions_keep_the_launch_book_and_library(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        for context in ("coverPickerContext", "exportPickerContext", "formatPickerContext"):
+            self.assertIn("property var " + context, panel)
+        self.assertRegex(panel, r"function\s+submitForLibrary\s*\(")
+        self.assertIn("bookId: root.coverPickerContext.bookId", panel)
+        self.assertIn("bookIds: [root.exportPickerContext.bookId]", panel)
+
+    def test_bootstrap_preserves_the_visible_search_and_sort(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        bootstrap_body = panel[panel.index("function bootstrap") : panel.index("function refresh")]
+        self.assertIn("Model.combineSearch(searchField.text, filterQuery)", bootstrap_body)
+        self.assertIn("sort: sortField", bootstrap_body)
+        self.assertIn("direction: sortDirection", bootstrap_body)
+
+    def test_bridge_exit_terminalizes_every_pending_request(self) -> None:
+        bridge = (ROOT / "CalibreBridge.qml").read_text()
+
+        self.assertIn("property var activeRequests:", bridge)
+        self.assertRegex(bridge, r"function\s+failPending\s*\(")
+        self.assertIn('code: "bridge_stopped"', bridge)
+        self.assertIn("root.failPending()", bridge)
+
+    def test_command_progress_stays_indeterminate_without_real_measurements(self) -> None:
+        backend = (ROOT / "backend" / "calibre_bridge.py").read_text()
+        model = (ROOT / "Model.js").read_text()
+        jobs = (ROOT / "JobsDialog.qml").read_text()
+        device = (ROOT / "DeviceDialog.qml").read_text()
+
+        self.assertNotIn('"fraction": 0.03', backend)
+        self.assertIn("determinate: false", model)
+        self.assertIn("job.determinate = true", model)
+        self.assertIn("NumberAnimation", jobs)
+        self.assertIn("property bool progressDeterminate", device)
+
+    def test_two_pane_layout_keeps_controls_inside_narrow_panels(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+        device = (ROOT / "DeviceDialog.qml").read_text()
+
+        self.assertRegex(panel, r"Grid\s*\{\s*id:\s*libraryPanes")
+        self.assertIn("readonly property bool stacked:", panel)
+        self.assertIn("columns: stacked ? 1 : 3", panel)
+        self.assertIn("stacked ? libraryPanes.width", panel)
+        self.assertIn("Math.min(Style.space(145), toolbar.width)", panel)
+        self.assertIn("Math.min(Style.space(105), toolbar.width)", panel)
+        self.assertIn("Math.min(Style.space(110), toolbar.width)", panel)
+        self.assertRegex(device, r"Flow\s*\{\s*id:\s*footer")
+        self.assertIn("height: implicitHeight", device)
+
+    def test_freeform_metadata_comments_have_an_accessible_name(self) -> None:
+        editor = (ROOT / "MetadataEditor.qml").read_text()
+        comments = editor[editor.index("QQC.TextArea {") : editor.index("background: BorderSurface", editor.index("QQC.TextArea {"))]
+
+        self.assertIn("Accessible.role: Accessible.EditableText", comments)
+        self.assertIn('Accessible.name: "Comments"', comments)
 
     def test_secondary_actions_live_in_a_keyboard_command_palette(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
