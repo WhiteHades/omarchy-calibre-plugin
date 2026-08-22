@@ -31,6 +31,7 @@ Panel {
   property string sortDirection: "ascending"
   property string filterQuery: ""
   property var confirmation: null
+  property int queryGeneration: 0
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -103,6 +104,22 @@ Panel {
     return id
   }
 
+  function cancelOutstandingQueries() {
+    for (var requestId in requestKinds) {
+      var kind = requestKinds[requestId]
+      if (kind === "query" || kind === "query-append") bridge.cancel(requestId)
+    }
+  }
+
+  function hasOutstandingAppend() {
+    for (var requestId in requestKinds) {
+      if (requestKinds[requestId] !== "query-append") continue
+      var context = requestContexts[requestId] || ({})
+      if (Number(context.queryGeneration) === queryGeneration) return true
+    }
+    return false
+  }
+
   function setStatus(message, isError) {
     lastError = String(message || "")
     lastMessageIsError = isError === true
@@ -122,6 +139,8 @@ Panel {
 
   function bootstrap(extraLibrary) {
     setStatus("", false)
+    queryGeneration += 1
+    cancelOutstandingQueries()
     var libraries = rememberedLibraries().slice()
     if (extraLibrary && libraries.indexOf(extraLibrary) === -1) libraries.unshift(extraLibrary)
     var id = bridge.submit("bootstrap", "", {
@@ -159,6 +178,13 @@ Panel {
     var context = requestContexts[event.id] || ({})
     viewState = Model.applyBridgeEvent(viewState, event)
     if (event.type === "accepted" || event.type === "progress") return
+
+    var isQueryRequest = kind === "query" || kind === "query-append"
+    if (isQueryRequest && Number(context.queryGeneration) !== queryGeneration) {
+      viewState = Model.forgetJob(viewState, event.id)
+      forgetRequest(event.id)
+      return
+    }
 
     if (event.type === "cancelled") {
       setStatus("Calibre operation cancelled.", false)
@@ -326,23 +352,27 @@ Panel {
 
   function search() {
     if (viewState.mode !== "library" || !viewState.currentLibrary) return
+    queryGeneration += 1
+    cancelOutstandingQueries()
+    var generation = queryGeneration
     submit("books.query", {
       search: Model.combineSearch(searchField.text, filterQuery),
       sort: sortField,
       direction: sortDirection,
       limit: Number(setting("pageSize", 50))
-    }, "query")
+    }, "query", { queryGeneration: generation })
   }
 
   function loadMore() {
-    if (!viewState.nextCursor || !viewState.currentLibrary) return
+    if (!viewState.nextCursor || !viewState.currentLibrary || hasOutstandingAppend()) return
+    var generation = queryGeneration
     submit("books.query", {
       search: Model.combineSearch(searchField.text, filterQuery),
       sort: sortField,
       direction: sortDirection,
       limit: Number(setting("pageSize", 50)),
       cursor: viewState.nextCursor
-    }, "query-append")
+    }, "query-append", { queryGeneration: generation })
   }
 
   function libraryOptions() {

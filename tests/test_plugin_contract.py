@@ -125,6 +125,17 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn('bridge.submit("action.discard"', panel)
         self.assertIn("confirmationToken: pending.token", panel)
 
+    def test_concurrent_searches_cannot_restore_stale_results(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("property int queryGeneration: 0", panel)
+        self.assertRegex(panel, r"function\s+cancelOutstandingQueries\s*\(")
+        self.assertIn('kind === "query" || kind === "query-append"', panel)
+        self.assertIn("bridge.cancel(requestId)", panel)
+        self.assertIn("context.queryGeneration", panel)
+        self.assertIn("queryGeneration: generation", panel)
+        self.assertIn("Model.forgetJob(viewState, event.id)", panel)
+
     def test_secondary_actions_live_in_a_keyboard_command_palette(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
         palette = (ROOT / "CommandPalette.qml").read_text()
