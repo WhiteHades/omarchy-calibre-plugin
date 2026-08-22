@@ -45,6 +45,6 @@ jobs:
 
       - name: Check patch hygiene
         run: |
-          git -C "$GITHUB_WORKSPACE" diff --check
-          empty_tree=$(git -C "$GITHUB_WORKSPACE" hash-object -t tree -w /dev/null)
-          git -C "$GITHUB_WORKSPACE" diff --check "$empty_tree" HEAD
+          git diff --check
+          empty_tree=$(git hash-object -t tree -w /dev/null)
+          git diff --check "$empty_tree" HEAD
