@@ -822,7 +822,8 @@ class CalibreBridge:
         defaults["languages"] = list(book.get("languages", []) or [])
         defaults["identifiers"] = dict(book.get("identifiers", {}) or {})
         defaults["series"] = str(book.get("series", "") or "")
-        defaults["seriesIndex"] = float(book.get("seriesIndex", 1.0) or 1.0)
+        series_index = book.get("seriesIndex", 1.0)
+        defaults["seriesIndex"] = float(1.0 if series_index in (None, "") else series_index)
         defaults["rating"] = float(book.get("rating", 0) or 0)
         defaults["publisher"] = str(book.get("publisher", "") or "")
         defaults["published"] = str(book.get("published", "") or "")
@@ -2620,13 +2621,14 @@ class CalibreBridge:
         published = str(row.get("pubdate", "") or "")
         if published.startswith("0101-"):
             published = ""
+        series_index = row.get("series_index", 1.0)
         return {
             "id": int(row.get("id", 0)),
             "title": str(row.get("title", "") or ""),
             "authors": authors,
             "authorSort": str(row.get("author_sort", "") or ""),
             "series": str(row.get("series", "") or ""),
-            "seriesIndex": float(row.get("series_index", 1.0) or 1.0),
+            "seriesIndex": float(1.0 if series_index in (None, "") else series_index),
             "rating": float(row.get("rating", 0) or 0) / 2,
             "tags": tags,
             "publisher": str(row.get("publisher", "") or ""),

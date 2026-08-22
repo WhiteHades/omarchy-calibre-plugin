@@ -187,6 +187,13 @@ class MetadataDownloadTest(unittest.TestCase):
 
         self.assertEqual(parsed["rating"], 2.0)
 
+    def test_zero_series_index_survives_metadata_preview_defaults(self) -> None:
+        book = fixture_book() | {"seriesIndex": 0}
+
+        candidate = CalibreBridge.complete_metadata_candidate(book, {})
+
+        self.assertEqual(candidate["seriesIndex"], 0.0)
+
     def test_apply_uses_only_selected_fields_and_cleans_preview(self) -> None:
         self.use_tools()
         preview = self.bridge.fetch_metadata("library-token", self.root, {"bookId": 1})

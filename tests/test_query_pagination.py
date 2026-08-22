@@ -29,6 +29,11 @@ class QueryFixtureBridge(CalibreBridge):
 
 
 class QueryPaginationTest(unittest.TestCase):
+    def test_zero_series_index_survives_book_normalization(self) -> None:
+        book = CalibreBridge.normalize_book({"id": 1, "series_index": 0})
+
+        self.assertEqual(book["seriesIndex"], 0.0)
+
     def test_only_the_requested_page_materializes_full_book_records(self) -> None:
         bridge = QueryFixtureBridge()
 
