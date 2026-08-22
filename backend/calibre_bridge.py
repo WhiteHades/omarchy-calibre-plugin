@@ -68,6 +68,8 @@ MAX_COVER_BYTES = 50 * 1024 * 1024
 MAX_METADATA_RESULT_BYTES = 5 * 1024 * 1024
 METADATA_FETCH_TIMEOUT = 120
 METADATA_PREVIEW_TTL = 300
+DEVICE_BOOK_FOLDERS = ("books", "ebooks", "documents")
+MAX_DEVICE_FILENAME_BYTES = 240
 DEVICE_ACTIONS = {
     "device.probe",
     "device.info",
@@ -888,13 +890,15 @@ class CalibreBridge:
         library = self.require_library(library_token)
         book_id = self.require_book_id(input_data.get("bookId"))
         format_name = self.require_format_name(input_data.get("format"), "format")
-        destination = self.require_device_destination(input_data.get("destination"))
         force = input_data.get("force", False)
         if not isinstance(force, bool):
             raise BridgeError("invalid_request", "force must be a boolean")
 
         book = self.get_book(str(library_token), book_id)
         self.find_format(book, format_name)
+        raw_destination = input_data.get("destination")
+        destination = self.default_device_destination(book, format_name) \
+            if raw_destination is None else self.require_device_destination(raw_destination)
         staging = Path(tempfile.mkdtemp(prefix="omarchy-calibre-device-"))
         try:
             self.run(
@@ -1382,6 +1386,72 @@ class CalibreBridge:
         if any(part in {".", ".."} for part in path.split("/")) or "//" in path:
             raise BridgeError("invalid_request", "Device destination cannot contain dot segments or empty path segments")
         return value
+
+    def default_device_destination(
+        self,
+        book: dict[str, Any],
+        format_name: str,
+    ) -> str:
+        folder = "/"
+        try:
+            listing = self.device_adapter.list("/")
+        except DeviceError as error:
+            if error.code != "unsupported":
+                raise
+        else:
+            entries = listing.get("entries", []) if isinstance(listing, dict) else []
+            if isinstance(entries, list):
+                for preferred in DEVICE_BOOK_FOLDERS:
+                    match = next(
+                        (
+                            entry
+                            for entry in entries
+                            if isinstance(entry, dict)
+                            and entry.get("isDirectory") is True
+                            and str(entry.get("name", "")).casefold() == preferred
+                            and self.safe_device_folder(entry.get("path")) is not None
+                        ),
+                        None,
+                    )
+                    if match is not None:
+                        folder = self.safe_device_folder(match.get("path")) or "/"
+                        break
+
+        title = self.safe_device_filename_part(book.get("title"), "Untitled")
+        raw_authors = book.get("authors", [])
+        if isinstance(raw_authors, str):
+            raw_authors = [raw_authors]
+        if not isinstance(raw_authors, list):
+            raw_authors = []
+        author_text = " & ".join(str(author) for author in raw_authors if str(author).strip())
+        authors = self.safe_device_filename_part(author_text, "")
+        stem = f"{title} - {authors}" if authors else title
+        extension = "." + format_name.lower()
+        budget = MAX_DEVICE_FILENAME_BYTES - len(extension.encode("utf-8"))
+        encoded_stem = stem.encode("utf-8")[:budget]
+        stem = encoded_stem.decode("utf-8", errors="ignore").rstrip(" .") or "Untitled"
+        filename = stem + extension
+        destination = (folder.rstrip("/") + "/" + filename) if folder != "/" else "/" + filename
+        return self.require_device_destination(destination)
+
+    @staticmethod
+    def safe_device_folder(value: Any) -> str | None:
+        if not isinstance(value, str) or not value.startswith("/"):
+            return None
+        if "\\" in value or "\x00" in value or "\n" in value or "\r" in value or "//" in value:
+            return None
+        if any(part in {".", ".."} for part in value.split("/")):
+            return None
+        return value.rstrip("/") or "/"
+
+    @staticmethod
+    def safe_device_filename_part(value: Any, fallback: str) -> str:
+        raw = str(value or "")
+        cleaned = "".join(
+            " " if character in '<>:"/\\|?*' or ord(character) < 32 or ord(character) == 127 else character
+            for character in raw
+        )
+        return " ".join(cleaned.split()).strip(" .") or fallback
 
     @staticmethod
     def staged_device_format(staging: Path, format_name: str) -> Path:

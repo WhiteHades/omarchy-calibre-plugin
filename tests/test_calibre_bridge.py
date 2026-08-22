@@ -1191,20 +1191,19 @@ class CalibreBridgeContractTest(unittest.TestCase):
                 "input": {
                     "bookId": 1,
                     "format": "TXT",
-                    "destination": "/Books/Dune.txt",
                 },
             }
         )[-1]
 
         self.assertEqual(result["type"], "succeeded")
         self.assertEqual(result["result"]["format"], "TXT")
-        self.assertEqual(result["result"]["destination"], "/Books/Dune.txt")
+        self.assertEqual(result["result"]["destination"], "/Books/Dune - Frank Herbert.txt")
         calls = log.read_text(encoding="utf-8").splitlines()
         send_calls = [call for call in calls if call.startswith("cp ")]
         self.assertEqual(len(send_calls), 1)
         send_parts = send_calls[0].split(" ")
         self.assertTrue(send_parts[1].startswith("/tmp/omarchy-calibre-device-"))
-        self.assertTrue(send_parts[-1].endswith("dev:/Books/Dune.txt"))
+        self.assertTrue(send_calls[0].endswith("dev:/Books/Dune - Frank Herbert.txt"))
         self.assertNotIn(str(self.library), send_parts[1])
         self.assertFalse(Path(send_parts[1]).exists())
 
