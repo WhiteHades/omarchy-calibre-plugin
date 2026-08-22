@@ -527,8 +527,19 @@ class CalibreBridge:
                 cover_path,
                 timeout,
             )
-            completed = self.run(command, timeout=timeout)
+            completed = self.run(command, timeout=timeout, check=False)
             output = completed.stdout or ""
+            if completed.returncode != 0:
+                stderr_lines = [line.strip() for line in (completed.stderr or "").splitlines()]
+                if not output.strip() and "No results found" in stderr_lines:
+                    raise BridgeError(
+                        "metadata_no_result",
+                        "Calibre found no metadata for this book",
+                        retryable=True,
+                    )
+                detail = (completed.stderr or output).strip()
+                message = detail.splitlines()[-1] if detail else "Calibre metadata lookup failed"
+                raise BridgeError("tool_failed", message)
             if not output.strip():
                 raise BridgeError(
                     "metadata_no_result",
@@ -860,27 +871,31 @@ class CalibreBridge:
         if current.get("modified", "") != plan.get("bookRevision", ""):
             raise BridgeError("confirmation_stale", "The selected book changed; review metadata again")
         cover = plan.get("cover")
-        if "cover" in selected and not isinstance(cover, Path):
-            raise BridgeError("metadata_cover_unavailable", "The metadata preview has no cover to apply")
+        if "cover" in selected:
+            staging = plan.get("staging")
+            current_cover = self.metadata_cover_path(staging) if isinstance(staging, Path) else None
+            if not isinstance(cover, Path) or current_cover != cover.resolve():
+                raise BridgeError("metadata_cover_unavailable", "The metadata preview has no cover to apply")
+            cover = current_cover
 
-        self.begin_commit()
         fields = {
             field: plan["candidate"][field]
             for field in selected
             if field in METADATA_FIELDS
         }
-        if fields:
-            self.update_metadata(
-                plan["libraryToken"],
-                plan["library"],
-                {"bookId": plan["bookId"], "fields": fields},
-            )
+        command = [
+            "calibredb",
+            "set_metadata",
+            "--with-library",
+            str(plan["library"]),
+            str(plan["bookId"]),
+        ]
+        for field, value in fields.items():
+            calibre_field = METADATA_FIELDS[field]
+            command.extend(["--field", f"{calibre_field}:{self.metadata_value(field, value)}"])
         if "cover" in selected:
-            self.set_cover(
-                plan["libraryToken"],
-                plan["library"],
-                {"bookId": plan["bookId"], "path": str(cover)},
-            )
+            command.extend(["--field", f"cover:{cover}"])
+        self.run(command, commit=True)
         return {
             "book": self.get_book(plan["libraryToken"], plan["bookId"]),
             "appliedFields": selected,

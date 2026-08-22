@@ -67,6 +67,8 @@ def write_fake_tools(
     output: str = OPF,
     cover: bool = True,
     sleep: float = 0,
+    fetch_exit: int = 0,
+    fetch_stderr: str = "",
 ) -> Path:
     bin_dir = root / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -79,7 +81,9 @@ def write_fake_tools(
         "if cover_index >= 0:\n"
         f"    cover = pathlib.Path(sys.argv[cover_index + 1])\n"
         f"    {'cover.write_bytes(b\"fake-cover\")' if cover else 'pass'}\n"
-        f"sys.stdout.write({output_literal})\n",
+        f"sys.stderr.write({fetch_stderr!r})\n"
+        f"sys.stdout.write({output_literal})\n"
+        f"raise SystemExit({fetch_exit!r})\n",
     )
     write_executable(
         bin_dir / "calibredb",
@@ -197,11 +201,11 @@ class MetadataDownloadTest(unittest.TestCase):
         self.assertEqual(applied["result"] if "result" in applied else applied["appliedFields"], ["title", "cover"])
         self.assertFalse(self.bridge.staging[0].exists())
         lines = self.log.read_text(encoding="utf-8").splitlines()
-        self.assertEqual(len(lines), 2)
+        self.assertEqual(len(lines), 1)
         self.assertIn("set_metadata", lines[0])
         self.assertIn("--field title:Updated title", lines[0])
         self.assertNotIn("tags:", lines[0])
-        self.assertIn("--field cover:", lines[1])
+        self.assertIn("--field cover:", lines[0])
 
     def test_discard_and_expiry_remove_staging(self) -> None:
         self.use_tools()
@@ -233,6 +237,21 @@ class MetadataDownloadTest(unittest.TestCase):
                     self.bridge.fetch_metadata("library-token", self.root, {"bookId": 1})
                 self.assertEqual(raised.exception.code, expected_code)
                 self.assertFalse(self.bridge.staging[-1].exists())
+
+    def test_calibres_nonzero_no_result_exit_is_retryable(self) -> None:
+        self.use_tools(
+            output="",
+            cover=False,
+            fetch_exit=1,
+            fetch_stderr="provider diagnostics\nNo results found\n",
+        )
+
+        with self.assertRaises(BridgeError) as raised:
+            self.bridge.fetch_metadata("library-token", self.root, {"bookId": 1})
+
+        self.assertEqual(raised.exception.code, "metadata_no_result")
+        self.assertTrue(raised.exception.retryable)
+        self.assertFalse(self.bridge.staging[-1].exists())
 
     def test_timeout_cleans_staging(self) -> None:
         self.use_tools(output=OPF, sleep=2)
