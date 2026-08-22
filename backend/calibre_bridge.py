@@ -13,6 +13,7 @@ import sys
 import tempfile
 import threading
 import time
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any, Callable
 
@@ -64,6 +65,9 @@ METADATA_FIELDS = {
 }
 COVER_EXTENSIONS = {".avif", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
 MAX_COVER_BYTES = 50 * 1024 * 1024
+MAX_METADATA_RESULT_BYTES = 5 * 1024 * 1024
+METADATA_FETCH_TIMEOUT = 120
+METADATA_PREVIEW_TTL = 300
 DEVICE_ACTIONS = {
     "device.probe",
     "device.info",
@@ -78,6 +82,7 @@ LIBRARY_MUTATIONS = {
     "format.add",
     "book.convert.quick",
 }
+METADATA_DOWNLOAD_FIELDS = tuple(METADATA_FIELDS)
 
 
 class BridgeError(Exception):
@@ -225,6 +230,7 @@ class CalibreBridge:
             "action.prepare": "Preparing Calibre action",
             "action.commit": "Applying confirmed action",
             "action.discard": "Discarding prepared action",
+            "book.metadata.fetch": "Fetching book metadata",
             "device.probe": "Checking ebook reader",
             "device.info": "Reading ebook reader",
             "device.list": "Reading ebook reader files",
@@ -370,6 +376,8 @@ class CalibreBridge:
             "format.remove",
             "book.export",
         ]
+        if shutil.which("fetch-ebook-metadata"):
+            actions.append("book.metadata.fetch")
         if shutil.which("ebook-convert"):
             actions.append("book.convert.quick")
         device = self.device_adapter.capabilities()
@@ -444,6 +452,8 @@ class CalibreBridge:
         action = input_data.get("name")
         if action == "book.metadata.update":
             return self.update_metadata(library_token, library, input_data)
+        if action == "book.metadata.fetch":
+            return self.fetch_metadata(library_token, library, input_data)
         if action == "book.cover.set":
             return self.set_cover(library_token, library, input_data)
         if action == "books.import":
@@ -478,6 +488,401 @@ class CalibreBridge:
         if action == "device.send":
             return self.device_send(library_token, input_data)
         raise BridgeError("invalid_request", f"Unknown device action: {action}")
+
+    def fetch_metadata(
+        self,
+        library_token: Any,
+        library: Path,
+        input_data: Any,
+    ) -> dict[str, Any]:
+        """Fetch metadata into a private preview plan without changing Calibre."""
+
+        if not isinstance(input_data, dict):
+            raise BridgeError("invalid_request", "Metadata input must be an object")
+        book_id = self.require_book_id(input_data.get("bookId"))
+        executable = shutil.which("fetch-ebook-metadata")
+        if executable is None:
+            raise BridgeError(
+                "capability_unavailable",
+                "The fetch-ebook-metadata command is unavailable",
+                retryable=True,
+            )
+        timeout = input_data.get("timeout", METADATA_FETCH_TIMEOUT)
+        if (
+            not isinstance(timeout, int)
+            or isinstance(timeout, bool)
+            or not 1 <= timeout <= 300
+        ):
+            raise BridgeError("invalid_request", "Metadata timeout must be between 1 and 300 seconds")
+
+        book = self.get_book(str(library_token), book_id)
+        staging = self.metadata_staging_directory()
+        cover_path = staging / "cover.jpg"
+        try:
+            command = self.metadata_fetch_command(
+                executable,
+                book,
+                cover_path,
+                timeout,
+            )
+            completed = self.run(command, timeout=timeout)
+            output = completed.stdout or ""
+            if not output.strip():
+                raise BridgeError(
+                    "metadata_no_result",
+                    "Calibre returned no metadata result",
+                    retryable=True,
+                )
+            if len(output.encode("utf-8")) > MAX_METADATA_RESULT_BYTES:
+                raise BridgeError("metadata_result_too_large", "Calibre returned too much metadata")
+            downloaded = self.parse_metadata_opf(output)
+            candidate = self.complete_metadata_candidate(book, downloaded)
+            cover = self.metadata_cover_path(staging)
+            changes = self.metadata_changes(book, candidate, cover is not None)
+            plan = {
+                "expires": time.monotonic() + METADATA_PREVIEW_TTL,
+                "name": "book.metadata.fetch",
+                "libraryToken": str(library_token),
+                "library": library,
+                "bookId": book_id,
+                "bookRevision": book.get("modified", ""),
+                "candidate": candidate,
+                "cover": cover,
+                "staging": staging,
+            }
+            # The preview remains cancellable while the network-backed CLI runs.
+            # Once the staged plan is stored, fence the operation so a late
+            # cancel cannot strand its temporary directory between requests.
+            token = self.store_confirmation(plan)
+            return {
+                "previewToken": token,
+                "bookId": book_id,
+                "candidate": candidate,
+                "changes": changes,
+                "coverAvailable": cover is not None,
+                "coverPath": str(cover) if cover is not None else "",
+                "expiresInSeconds": METADATA_PREVIEW_TTL,
+            }
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+
+    @staticmethod
+    def metadata_staging_directory() -> Path:
+        return Path(tempfile.mkdtemp(prefix="omarchy-calibre-metadata-"))
+
+    @staticmethod
+    def metadata_fetch_command(
+        executable: str,
+        book: dict[str, Any],
+        cover_path: Path,
+        timeout: int,
+    ) -> list[str]:
+        title = str(book.get("title", "") or "").strip()
+        authors = book.get("authors", [])
+        if isinstance(authors, str):
+            authors = [authors]
+        if not isinstance(authors, list):
+            authors = []
+        authors = [str(author).strip() for author in authors if str(author).strip()]
+        identifiers = book.get("identifiers", {})
+        if not isinstance(identifiers, dict):
+            identifiers = {}
+        identifiers = {
+            str(key).strip().lower(): str(value).strip()
+            for key, value in identifiers.items()
+            if str(key).strip() and str(value).strip()
+        }
+        isbn = str(book.get("isbn", "") or "").strip()
+        if not isbn:
+            for key in ("isbn", "isbn13", "isbn10"):
+                if identifiers.get(key):
+                    isbn = identifiers[key]
+                    break
+
+        if not title and not authors and not isbn and not identifiers:
+            raise BridgeError(
+                "metadata_identity_missing",
+                "The selected book has no title, author, ISBN, or identifier",
+            )
+
+        command = [executable, "--opf"]
+        if title:
+            command.extend(["--title", title])
+        if authors:
+            command.extend(["--authors", " & ".join(authors)])
+        if isbn:
+            command.extend(["--isbn", isbn])
+        for key, value in identifiers.items():
+            if key in {"isbn", "isbn10", "isbn13"}:
+                continue
+            command.extend(["--identifier", f"{key}:{value}"])
+        command.extend(["--cover", str(cover_path), "--timeout", str(timeout)])
+        return command
+
+    @staticmethod
+    def metadata_cover_path(staging: Path) -> Path | None:
+        candidate = staging / "cover.jpg"
+        if not candidate.exists():
+            return None
+        try:
+            resolved = candidate.resolve(strict=True)
+            root = staging.resolve(strict=True)
+            size = resolved.stat().st_size
+        except (OSError, RuntimeError) as error:
+            raise BridgeError("metadata_cover_invalid", "Calibre returned an unreadable cover") from error
+        if not resolved.is_relative_to(root) or not resolved.is_file():
+            raise BridgeError("metadata_cover_invalid", "Calibre returned an invalid cover")
+        if size < 1 or size > MAX_COVER_BYTES:
+            raise BridgeError("metadata_cover_invalid", "Calibre returned an invalid cover size")
+        return resolved
+
+    @staticmethod
+    def opf_local_name(tag: Any) -> str:
+        if not isinstance(tag, str):
+            return ""
+        return tag.rsplit("}", 1)[-1].lower()
+
+    @classmethod
+    def opf_text(cls, element: ET.Element) -> str:
+        return "".join(element.itertext()).strip()
+
+    @classmethod
+    def parse_metadata_opf(cls, output: str) -> dict[str, Any]:
+        try:
+            root = ET.fromstring(output)
+        except ET.ParseError as error:
+            raise BridgeError("metadata_malformed_opf", "Calibre returned malformed OPF metadata") from error
+
+        metadata_nodes = [
+            element
+            for element in root.iter()
+            if cls.opf_local_name(element.tag) == "metadata"
+        ]
+        if not metadata_nodes:
+            raise BridgeError("metadata_malformed_opf", "Calibre returned OPF without metadata")
+        metadata = metadata_nodes[0]
+        result: dict[str, Any] = {}
+
+        creators = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "creator" and cls.opf_text(element)
+        ]
+        if creators:
+            result["authors"] = creators
+        titles = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "title" and cls.opf_text(element)
+        ]
+        if titles:
+            result["title"] = titles[0]
+        subjects = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "subject" and cls.opf_text(element)
+        ]
+        if subjects:
+            result["tags"] = subjects
+        publishers = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "publisher" and cls.opf_text(element)
+        ]
+        if publishers:
+            result["publisher"] = publishers[0]
+        dates = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "date" and cls.opf_text(element)
+        ]
+        if dates:
+            result["published"] = dates[0]
+        languages = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "language" and cls.opf_text(element)
+        ]
+        if languages:
+            result["languages"] = languages
+        descriptions = [
+            cls.opf_text(element)
+            for element in metadata.iter()
+            if cls.opf_local_name(element.tag) == "description" and cls.opf_text(element)
+        ]
+        if descriptions:
+            result["comments"] = descriptions[0]
+
+        identifiers: dict[str, str] = {}
+        for element in metadata.iter():
+            if cls.opf_local_name(element.tag) != "identifier":
+                continue
+            value = cls.opf_text(element)
+            if not value:
+                continue
+            attributes = {
+                cls.opf_local_name(key): str(attribute).strip()
+                for key, attribute in element.attrib.items()
+            }
+            scheme = attributes.get("scheme", "").lower()
+            if not scheme and ":" in value:
+                prefix, possible_value = value.split(":", 1)
+                if prefix and possible_value:
+                    scheme, value = prefix.lower(), possible_value
+            if scheme in {"calibre", "uuid"} or value.lower().startswith("urn:uuid:"):
+                continue
+            identifiers[scheme or "identifier"] = value
+        if identifiers:
+            result["identifiers"] = identifiers
+
+        for element in metadata.iter():
+            if cls.opf_local_name(element.tag) != "meta":
+                continue
+            attributes = {
+                cls.opf_local_name(key): str(attribute).strip()
+                for key, attribute in element.attrib.items()
+            }
+            name = attributes.get("name", attributes.get("property", "")).lower()
+            content = attributes.get("content", "").strip()
+            if not content:
+                continue
+            if name in {"calibre:series", "series"}:
+                result["series"] = content
+            elif name in {"calibre:series_index", "series_index"}:
+                try:
+                    result["seriesIndex"] = float(content)
+                except ValueError:
+                    continue
+            elif name in {"calibre:rating", "rating"}:
+                try:
+                    rating = float(content)
+                except ValueError:
+                    continue
+                result["rating"] = rating / 2 if rating > 5 else rating
+
+        if not result:
+            raise BridgeError("metadata_no_result", "Calibre returned no usable metadata result", retryable=True)
+        return result
+
+    @staticmethod
+    def complete_metadata_candidate(
+        book: dict[str, Any],
+        downloaded: dict[str, Any],
+    ) -> dict[str, Any]:
+        defaults: dict[str, Any] = {
+            field: book.get(field, [] if field in {"authors", "tags", "languages"} else {})
+            for field in METADATA_DOWNLOAD_FIELDS
+        }
+        defaults["title"] = str(book.get("title", "") or "")
+        defaults["authors"] = list(book.get("authors", []) or [])
+        defaults["tags"] = list(book.get("tags", []) or [])
+        defaults["languages"] = list(book.get("languages", []) or [])
+        defaults["identifiers"] = dict(book.get("identifiers", {}) or {})
+        defaults["series"] = str(book.get("series", "") or "")
+        defaults["seriesIndex"] = float(book.get("seriesIndex", 1.0) or 1.0)
+        defaults["rating"] = float(book.get("rating", 0) or 0)
+        defaults["publisher"] = str(book.get("publisher", "") or "")
+        defaults["published"] = str(book.get("published", "") or "")
+        defaults["comments"] = str(book.get("comments", "") or "")
+        for field, value in downloaded.items():
+            if field not in METADATA_FIELDS:
+                continue
+            if field == "tags":
+                if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                    existing = defaults["tags"]
+                    existing_names = {item.casefold() for item in existing}
+                    downloaded_tags = []
+                    seen = set(existing_names)
+                    for item in value:
+                        key = item.casefold()
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        downloaded_tags.append(item)
+                    defaults[field] = downloaded_tags + existing
+            elif field in {"authors", "languages"}:
+                if isinstance(value, list) and all(isinstance(item, str) for item in value):
+                    defaults[field] = value
+            elif field == "identifiers":
+                if isinstance(value, dict) and all(
+                    isinstance(key, str) and isinstance(item, str)
+                    for key, item in value.items()
+                ):
+                    defaults[field] = {**defaults["identifiers"], **value}
+            elif field in {"rating", "seriesIndex"}:
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    defaults[field] = value
+            elif isinstance(value, str):
+                defaults[field] = value
+        return defaults
+
+    @staticmethod
+    def metadata_changes(
+        book: dict[str, Any],
+        candidate: dict[str, Any],
+        cover_available: bool,
+    ) -> list[dict[str, Any]]:
+        changes = []
+        for field in METADATA_DOWNLOAD_FIELDS:
+            current = book.get(field, [] if field in {"authors", "tags", "languages"} else {})
+            proposed = candidate.get(field)
+            if current != proposed:
+                changes.append({"field": field, "current": current, "proposed": proposed})
+        if cover_available:
+            changes.append({
+                "field": "cover",
+                "current": bool(book.get("cover")),
+                "proposed": True,
+            })
+        return changes
+
+    def apply_metadata_preview(
+        self,
+        plan: dict[str, Any],
+        input_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        selected = input_data.get("fields", input_data.get("selectedFields"))
+        if not isinstance(selected, list) or not selected:
+            raise BridgeError("invalid_request", "Metadata fields must contain at least one field")
+        if len(selected) > len(METADATA_DOWNLOAD_FIELDS) + 1 or not all(
+            isinstance(field, str) for field in selected
+        ):
+            raise BridgeError("invalid_request", "Metadata fields are invalid")
+        selected = list(dict.fromkeys(selected))
+        allowed = set(METADATA_DOWNLOAD_FIELDS) | {"cover"}
+        if any(field not in allowed for field in selected):
+            raise BridgeError("invalid_request", "Metadata fields contain an unsupported field")
+
+        current = self.get_book(plan["libraryToken"], plan["bookId"])
+        if current.get("modified", "") != plan.get("bookRevision", ""):
+            raise BridgeError("confirmation_stale", "The selected book changed; review metadata again")
+        cover = plan.get("cover")
+        if "cover" in selected and not isinstance(cover, Path):
+            raise BridgeError("metadata_cover_unavailable", "The metadata preview has no cover to apply")
+
+        self.begin_commit()
+        fields = {
+            field: plan["candidate"][field]
+            for field in selected
+            if field in METADATA_FIELDS
+        }
+        if fields:
+            self.update_metadata(
+                plan["libraryToken"],
+                plan["library"],
+                {"bookId": plan["bookId"], "fields": fields},
+            )
+        if "cover" in selected:
+            self.set_cover(
+                plan["libraryToken"],
+                plan["library"],
+                {"bookId": plan["bookId"], "path": str(cover)},
+            )
+        return {
+            "book": self.get_book(plan["libraryToken"], plan["bookId"]),
+            "appliedFields": selected,
+        }
 
     def device_send(self, library_token: Any, input_data: dict[str, Any]) -> dict[str, Any]:
         library = self.require_library(library_token)
@@ -571,6 +976,11 @@ class CalibreBridge:
         if plan["expires"] < time.monotonic():
             self.cleanup_plan(plan)
             raise BridgeError("confirmation_required", "The confirmation has expired or was already used")
+        if plan["name"] == "book.metadata.fetch":
+            try:
+                return self.apply_metadata_preview(plan, input_data)
+            finally:
+                self.cleanup_plan(plan)
         if plan["name"] == "book.remove":
             book_ids = plan["bookIds"]
             for book_id in book_ids:
