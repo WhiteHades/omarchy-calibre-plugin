@@ -14,6 +14,7 @@ Column {
   spacing: Style.space(3)
 
   Text {
+    textFormat: Text.PlainText
     width: parent.width
     text: root.label.toUpperCase()
     color: Qt.darker(root.foreground, 1.4)

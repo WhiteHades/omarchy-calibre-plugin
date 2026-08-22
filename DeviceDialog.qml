@@ -13,6 +13,7 @@ BorderSurface {
   property var preferredFormats: ["EPUB", "AZW3", "PDF", "MOBI"]
   property string selectedFormat: ""
   property string deviceState: "probing"
+  property string conflictFormat: ""
   property var deviceInfo: null
   property var deviceError: null
   property var deviceCapabilities: ({})
@@ -22,7 +23,7 @@ BorderSurface {
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
 
-  signal sendRequested(string format, bool force)
+  signal sendRequested(string format, bool replace)
   signal retryRequested()
   signal ejectRequested()
   signal cancelRequested()
@@ -42,11 +43,13 @@ BorderSurface {
   }
   readonly property bool readerReady: normalizedState === "ready"
     || normalizedState === "sending" || normalizedState === "sent"
-    || normalizedState === "conflict"
+    || normalizedState === "conflict" || normalizedState === "ejecting"
   readonly property bool retryableState: normalizedState === "no-device"
     || normalizedState === "locked" || normalizedState === "error"
     || normalizedState === "ejected"
   readonly property bool sending: normalizedState === "sending"
+  readonly property bool replacesConflict: normalizedState === "conflict"
+    && conflictFormat !== "" && selectedFormat === conflictFormat
   readonly property bool formatAvailable: (formatOptions || []).length > 0
   readonly property bool sendAvailable: capability("send", true)
   readonly property bool ejectAvailable: capability("eject", false)
@@ -140,6 +143,7 @@ BorderSurface {
     if (normalizedState === "conflict") return "Book already on reader"
     if (normalizedState === "sending") return "Sending to " + readerName
     if (normalizedState === "sent") return "Book sent"
+    if (normalizedState === "ejecting") return "Ejecting reader"
     if (normalizedState === "ejected") return "Reader ejected"
     return "Send to reader"
   }
@@ -152,6 +156,7 @@ BorderSurface {
     if (normalizedState === "conflict") return "Replace the reader copy with this library version?"
     if (normalizedState === "sending") return root.progressMessage || "Calibre is sending the selected format."
     if (normalizedState === "sent") return "The book is ready on your reader."
+    if (normalizedState === "ejecting") return "Calibre is preparing the reader for safe removal."
     if (normalizedState === "ejected") return "You can disconnect the reader safely."
     return "Choose a format. Calibre will handle the reader transfer."
   }
@@ -182,6 +187,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.stateTitle()
           color: root.foreground
@@ -192,6 +198,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.book ? String(root.book.title || "") : ""
           color: Qt.darker(root.foreground, 1.45)
@@ -224,6 +231,7 @@ BorderSurface {
         spacing: Style.space(10)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.stateDescription()
           color: root.normalizedState === "error" || root.normalizedState === "locked"
@@ -236,6 +244,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           visible: root.normalizedState === "probing"
           width: parent.width
           text: "Please wait…"
@@ -251,6 +260,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.readerName
             color: root.foreground
@@ -262,6 +272,7 @@ BorderSurface {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.normalizedState === "ready" || root.normalizedState === "sending"
               || root.normalizedState === "conflict"
             width: parent.width
@@ -280,12 +291,14 @@ BorderSurface {
             label: "BOOK FORMAT"
             options: root.formatOptions
             value: root.selectedFormat
+            enabled: root.normalizedState === "ready" || root.normalizedState === "sent"
             foreground: root.foreground
             fontFamily: root.fontFamily
             onChanged: function(value) { root.selectedFormat = value }
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.normalizedState === "ready" && !root.formatAvailable
             width: parent.width
             text: "This book has no transferable formats."
@@ -297,7 +310,7 @@ BorderSurface {
           }
 
           BorderSurface {
-            visible: root.normalizedState === "sending"
+            visible: root.normalizedState === "sending" || root.normalizedState === "ejecting"
             width: parent.width
             height: Style.space(5)
             color: Qt.darker(root.foreground, 2.4)
@@ -313,6 +326,7 @@ BorderSurface {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.normalizedState === "sent"
             width: parent.width
             text: root.selectedFormat ? root.selectedFormat + " is on the reader." : "The book is on the reader."
@@ -331,8 +345,10 @@ BorderSurface {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         width: Math.max(0, parent.width - cancelButton.width - retryButton.width - ejectButton.width - sendButton.width - parent.spacing * 4)
-        text: root.normalizedState === "sending" ? (root.progressMessage || "Working…") : ""
+        text: root.normalizedState === "sending" || root.normalizedState === "ejecting"
+          ? (root.progressMessage || "Working…") : ""
         color: Qt.darker(root.foreground, 1.45)
         font.family: root.fontFamily
         font.pixelSize: Style.font.caption
@@ -376,13 +392,13 @@ BorderSurface {
         visible: root.sendAvailable && root.formatAvailable
           && (root.normalizedState === "ready" || root.normalizedState === "sent"
             || root.normalizedState === "conflict")
-        text: root.normalizedState === "conflict" ? "Replace"
+        text: root.replacesConflict ? "Replace"
           : (root.normalizedState === "sent" ? "Send again" : "Send")
         bordered: true
         foreground: root.foreground
         fontFamily: root.fontFamily
         focusable: true
-        onClicked: root.sendRequested(root.selectedFormat, root.normalizedState === "conflict")
+        onClicked: root.sendRequested(root.selectedFormat, root.replacesConflict)
       }
     }
   }

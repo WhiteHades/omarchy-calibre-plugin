@@ -90,6 +90,15 @@ class PluginContractTest(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertLessEqual(int(match.group(1)), 10_000)
 
+    def test_all_display_text_uses_plain_text_rendering(self) -> None:
+        for path in ROOT.glob("*.qml"):
+            source = path.read_text()
+            self.assertEqual(
+                source.count("Text {"),
+                source.count("textFormat: Text.PlainText"),
+                path.name,
+            )
+
     def test_panel_exposes_the_adoption_first_workflows(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
 
@@ -108,6 +117,14 @@ class PluginContractTest(unittest.TestCase):
             self.assertIn(operation, panel)
         self.assertIn('Quickshell.execDetached(["xdg-open", path])', panel)
         self.assertNotIn('Quickshell.execDetached(["bash"', panel)
+
+    def test_toolbar_wraps_without_collapsing_the_two_pane_layout(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("Flow {\n            id: toolbar", panel)
+        self.assertIn("height: implicitHeight", panel)
+        self.assertRegex(panel, r'PanelSectionHeader\s*\{\s*text: "CATALOGUE"')
+        self.assertIn("width: Math.floor((parent.width - parent.spacing) * 0.47)", panel)
 
     def test_job_cancellation_stays_inside_the_bridge_protocol(self) -> None:
         bridge = (ROOT / "CalibreBridge.qml").read_text()
@@ -155,6 +172,65 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn('root.dialogMode = "help"', panel)
         self.assertIn("calibreVersion: String(root.viewState.calibre.version", panel)
         self.assertIn("libraryPath: root.libraryPath()", panel)
+
+    def test_reader_transfer_is_native_and_never_asks_for_a_device_path(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("DeviceDialog {", panel)
+        self.assertIn('id: "device"', panel)
+        self.assertIn('operation, inputData, kind', panel)
+        self.assertIn('submit("device.probe"', panel)
+        self.assertIn('submit("device.send"', panel)
+        self.assertIn('submit("device.eject"', panel)
+        self.assertIn('submit("action.commit"', panel)
+        self.assertIn("confirmationToken: conflict.confirmationToken", panel)
+        self.assertNotIn("deviceDestination", panel)
+        send_function = panel[panel.find("function sendBookToDevice"):panel.find("function canReplaceDeviceConflict")]
+        self.assertNotIn("force:", send_function)
+        self.assertNotIn("destination:", send_function)
+
+    def test_reader_results_and_replace_confirmation_are_session_bound(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("property int deviceSessionGeneration", panel)
+        self.assertIn("property var deviceBook", panel)
+        self.assertIn("function isCurrentDeviceRequest", panel)
+        self.assertIn("sessionGeneration: deviceSessionGeneration", panel)
+        self.assertIn("libraryToken: viewState.currentLibrary", panel)
+        self.assertIn("bookId: deviceBook.id", panel)
+        self.assertIn("format: requestedFormat", panel)
+        self.assertIn("deviceConflict.format", panel)
+        self.assertIn("deviceConflict.confirmationToken", panel)
+        self.assertIn("function discardDeviceConflict", panel)
+        self.assertIn('result.state === "error"', panel)
+        self.assertIn("stateForDeviceError(result.error)", panel)
+
+    def test_metadata_preview_can_apply_selected_fields_or_be_discarded(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("MetadataDownloadDialog {", panel)
+        self.assertIn('name: "book.metadata.fetch"', panel)
+        self.assertIn('submit("action.commit"', panel)
+        self.assertIn('submit("action.discard"', panel)
+        self.assertIn("fields: fields", panel)
+        self.assertIn('downloadAvailable: root.hasCapability("book.metadata.fetch")', panel)
+        self.assertIn('id: "metadata-fetch"', panel)
+        self.assertIn("discardMetadataToken(result.previewToken, context.libraryToken)", panel)
+
+    def test_metadata_results_are_bound_to_the_open_book_and_library(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("property int metadataSessionGeneration", panel)
+        self.assertIn("property var metadataBook", panel)
+        self.assertIn("property string metadataPreviewLibraryToken", panel)
+        self.assertIn("function isCurrentMetadataRequest", panel)
+        self.assertIn("sessionGeneration: metadataSessionGeneration", panel)
+        self.assertIn("libraryToken: viewState.currentLibrary", panel)
+        self.assertIn("bookId: metadataBook.id", panel)
+        self.assertIn("previewToken: metadataPreviewToken", panel)
+        self.assertIn("discardMetadataToken(result.previewToken, context.libraryToken)", panel)
+        self.assertIn("discardMetadataToken(context.previewToken, context.libraryToken)", panel)
+        self.assertIn("book: root.metadataBook", panel)
 
     def test_tracked_sources_do_not_publish_a_private_home_path(self) -> None:
         private_home = "/home/" + "efaz"

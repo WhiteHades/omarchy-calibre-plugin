@@ -22,6 +22,7 @@ COMMANDS = ("info", "books", "df", "ls", "cp", "mkdir", "touch", "cat", "rm", "e
 DEVICE_COMMANDS = {
     "info": "info",
     "list": "ls",
+    "receive": "cp",
     "send": "cp",
     "eject": "eject",
 }
@@ -219,6 +220,32 @@ class DeviceAdapter:
             "replaced": force,
         }
 
+    def receive(
+        self,
+        source: str,
+        destination: str | os.PathLike[str],
+    ) -> dict[str, str]:
+        """Copy one device file to a new validated local path."""
+        device_path = self._device_path(source, allow_root=False, label="Device source")
+        local_destination = self._local_destination(destination)
+        self._require_command("receive")
+        try:
+            self._checked_invoke(
+                ("cp", f"dev:{device_path}", str(local_destination)),
+                "receive",
+            )
+        except Exception:
+            local_destination.unlink(missing_ok=True)
+            raise
+        if local_destination.is_symlink() or not local_destination.is_file():
+            local_destination.unlink(missing_ok=True)
+            raise DeviceError(
+                "invalid_output",
+                "ebook-device did not create the requested local file",
+                action="receive",
+            )
+        return {"source": device_path, "destination": str(local_destination)}
+
     def eject(self) -> dict[str, bool]:
         """Eject the connected device through Calibre."""
         self._require_command("eject")
@@ -345,6 +372,7 @@ class DeviceAdapter:
         return {
             "info": "info" in commands,
             "list": "ls" in commands,
+            "receive": "cp" in commands,
             "send": "cp" in commands,
             "eject": "eject" in commands,
         }
@@ -386,6 +414,29 @@ class DeviceAdapter:
         if not path.is_file():
             raise DeviceError("invalid_request", "Source must identify an existing file")
         return path
+
+    @classmethod
+    def _local_destination(cls, value: str | os.PathLike[str]) -> Path:
+        if not isinstance(value, (str, os.PathLike)):
+            raise DeviceError("invalid_request", "Destination must be a file path")
+        raw = os.fspath(value)
+        if not raw or len(raw) > MAX_ARGUMENT_LENGTH or "\x00" in raw:
+            raise DeviceError("invalid_request", "Destination must be a valid file path")
+        if raw.endswith(os.sep) or (os.altsep and raw.endswith(os.altsep)):
+            raise DeviceError("invalid_request", "Destination must identify a file")
+        unresolved = Path(raw).expanduser()
+        if unresolved.name in {"", ".", ".."}:
+            raise DeviceError("invalid_request", "Destination must identify a file")
+        try:
+            parent = unresolved.parent.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise DeviceError("invalid_request", "Destination parent must exist") from error
+        if not parent.is_dir():
+            raise DeviceError("invalid_request", "Destination parent must be a directory")
+        destination = parent / unresolved.name
+        if os.path.lexists(destination):
+            raise DeviceError("invalid_request", "Destination must not already exist")
+        return destination
 
     @classmethod
     def _device_path(cls, value: str, *, allow_root: bool, label: str) -> str:

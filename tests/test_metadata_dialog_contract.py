@@ -40,13 +40,26 @@ class MetadataDownloadDialogContractTest(unittest.TestCase):
 
     def test_review_has_recovery_and_keyboard_paths(self) -> None:
         self.assertIn("function dismiss()", self.source)
-        self.assertIn("if (hasReview) discarded()", self.source)
+        self.assertIn("if (hasPreview) discarded()", self.source)
         self.assertIn("cancelJobRequested()", self.source)
         self.assertIn("retryRequested()", self.source)
         self.assertIn("Qt.Key_Escape", self.source)
         self.assertRegex(self.source, r"CalibreIcon\s*\{")
         self.assertIn("function localImageSource(value)", self.source)
         self.assertIn('encodeURI("file://" + text)', self.source)
+
+    def test_review_rows_are_accessible_and_follow_keyboard_focus(self) -> None:
+        self.assertGreaterEqual(self.source.count("Accessible.role: Accessible.CheckBox"), 2)
+        self.assertGreaterEqual(self.source.count("Accessible.checked:"), 2)
+        self.assertGreaterEqual(self.source.count("Accessible.onPressAction:"), 2)
+        self.assertIn("function revealReviewItem(item)", self.source)
+        self.assertGreaterEqual(self.source.count("onActiveFocusChanged:"), 2)
+
+    def test_downloaded_metadata_is_always_rendered_as_plain_text(self) -> None:
+        self.assertEqual(
+            self.source.count("Text {"),
+            self.source.count("textFormat: Text.PlainText"),
+        )
 
     def test_inactive_states_do_not_render_outside_zero_height_containers(self) -> None:
         for state in (

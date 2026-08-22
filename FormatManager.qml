@@ -45,6 +45,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Manage formats"
           color: root.foreground
@@ -55,6 +56,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.book ? root.book.title : ""
           color: Qt.darker(root.foreground, 1.45)
@@ -77,6 +79,7 @@ BorderSurface {
     PanelSeparator { width: parent.width }
 
     Text {
+      textFormat: Text.PlainText
       width: parent.width
       text: "Open a format with its default application, attach another file, or remove a format from this record."
       color: Qt.darker(root.foreground, 1.45)
@@ -124,6 +127,7 @@ BorderSurface {
                 spacing: Style.space(2)
 
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: String(formatRow.modelData.name || "").toUpperCase()
                   color: root.foreground
@@ -134,6 +138,7 @@ BorderSurface {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: Model.formatBytes(formatRow.modelData.size)
                   color: Qt.darker(root.foreground, 1.5)
@@ -163,6 +168,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           visible: !root.book || !(root.book.formats instanceof Array) || root.book.formats.length === 0
           width: parent.width
           text: "This record has no attached book files."

@@ -125,6 +125,7 @@ BorderSurface {
       }
 
       Text {
+        textFormat: Text.PlainText
         width: Math.max(0, parent.width - metadataIcon.width - coverButton.width
           - (root.downloadAvailable ? downloadButton.width : 0)
           - parent.spacing * (root.downloadAvailable ? 3 : 2))
@@ -193,6 +194,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           text: "COMMENTS"
           color: Qt.darker(root.foreground, 1.4)
           font.family: root.fontFamily
@@ -231,6 +233,7 @@ BorderSurface {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         width: Math.max(0, parent.width - cancelButton.width - saveButton.width - parent.spacing * 2)
         text: root.validationError
         color: root.urgent

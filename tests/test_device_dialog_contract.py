@@ -18,7 +18,7 @@ class DeviceDialogContractTest(unittest.TestCase):
         self.assertIn("Button {", self.source)
 
     def test_reader_states_and_actions_are_explicit(self) -> None:
-        for state in ("probing", "no-device", "locked", "error", "ready", "sending", "sent", "conflict", "ejected"):
+        for state in ("probing", "no-device", "locked", "error", "ready", "sending", "sent", "conflict", "ejecting", "ejected"):
             self.assertIn('"' + state + '"', self.source)
         for signal in (
             "sendRequested",
@@ -38,10 +38,21 @@ class DeviceDialogContractTest(unittest.TestCase):
         self.assertNotIn("destination", self.source)
 
     def test_existing_reader_file_requires_an_explicit_replace_retry(self) -> None:
-        self.assertIn("signal sendRequested(string format, bool force)", self.source)
+        self.assertIn("signal sendRequested(string format, bool replace)", self.source)
+        self.assertIn("property string conflictFormat", self.source)
+        self.assertIn("readonly property bool replacesConflict", self.source)
         self.assertIn('normalizedState === "conflict"', self.source)
-        self.assertIn('text: root.normalizedState === "conflict" ? "Replace"', self.source)
-        self.assertIn('root.sendRequested(root.selectedFormat, root.normalizedState === "conflict")', self.source)
+        self.assertIn('text: root.replacesConflict ? "Replace"', self.source)
+        self.assertIn("root.sendRequested(root.selectedFormat, root.replacesConflict)", self.source)
+
+    def test_format_picker_is_locked_while_send_or_replace_is_pending(self) -> None:
+        self.assertIn('enabled: root.normalizedState === "ready" || root.normalizedState === "sent"', self.source)
+
+    def test_reader_and_book_values_are_always_rendered_as_plain_text(self) -> None:
+        self.assertEqual(
+            self.source.count("Text {"),
+            self.source.count("textFormat: Text.PlainText"),
+        )
 
     def test_keyboard_escape_and_focusable_actions_are_present(self) -> None:
         self.assertIn("focus: visible", self.source)

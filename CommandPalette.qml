@@ -64,6 +64,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Calibre commands"
           color: root.foreground
@@ -74,6 +75,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Type an action, then press Enter."
           color: Qt.darker(root.foreground, 1.45)
@@ -135,6 +137,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: Math.max(0, parent.width - shortcutText.width - parent.spacing)
             text: String(commandRow.modelData.label || "")
             color: root.foreground
@@ -144,6 +147,7 @@ BorderSurface {
           }
 
           Text {
+            textFormat: Text.PlainText
             id: shortcutText
             text: String(commandRow.modelData.key || "")
             color: Qt.darker(root.foreground, 1.4)
@@ -162,6 +166,7 @@ BorderSurface {
       }
 
       Text {
+        textFormat: Text.PlainText
         visible: root.filteredCommands.length === 0
         anchors.centerIn: parent
         text: "No matching commands."
@@ -172,6 +177,7 @@ BorderSurface {
     }
 
     Text {
+      textFormat: Text.PlainText
       id: helpText
       width: parent.width
       text: "↑↓ select  ·  Enter run  ·  Esc close"

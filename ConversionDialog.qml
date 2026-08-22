@@ -173,6 +173,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Convert " + (root.book ? root.book.title : "book")
           color: root.foreground
@@ -183,6 +184,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Calibre defaults are used unless you change an advanced option."
           color: Qt.darker(root.foreground, 1.45)
@@ -240,6 +242,7 @@ BorderSurface {
     }
 
     Text {
+      textFormat: Text.PlainText
       visible: root.replacesFormat
       width: parent.width
       text: root.outputFormat + " already exists. Calibre will stage the conversion and ask before replacing it."
@@ -268,6 +271,7 @@ BorderSurface {
       height: root.advanced ? Math.max(0, parent.height - y - footer.height - parent.spacing) : 0
 
       Text {
+        textFormat: Text.PlainText
         visible: root.describing
         anchors.centerIn: parent
         text: "Loading Calibre options…"
@@ -302,6 +306,7 @@ BorderSurface {
               spacing: Style.space(3)
 
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: optionRow.modelData.group.toUpperCase() + "  /  " + optionRow.modelData.label.toUpperCase()
                 color: Qt.darker(root.foreground, 1.4)
@@ -319,6 +324,7 @@ BorderSurface {
               }
 
               Text {
+                textFormat: Text.PlainText
                 visible: optionRow.modelData.help !== ""
                 width: parent.width
                 text: optionRow.modelData.help
@@ -377,6 +383,7 @@ BorderSurface {
         spacing: Style.space(8)
 
         Text {
+          textFormat: Text.PlainText
           anchors.horizontalCenter: parent.horizontalCenter
           text: root.inputFormat + "  →  " + root.outputFormat
           color: root.foreground
@@ -386,6 +393,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           anchors.horizontalCenter: parent.horizontalCenter
           text: "Quick conversion"
           color: Qt.darker(root.foreground, 1.45)
@@ -401,6 +409,7 @@ BorderSurface {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         width: Math.max(0, parent.width - cancelButton.width - convertButton.width - parent.spacing * 2)
         text: root.validationError
         color: root.urgent

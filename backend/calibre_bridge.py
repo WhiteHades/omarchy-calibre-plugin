@@ -88,18 +88,30 @@ METADATA_DOWNLOAD_FIELDS = tuple(METADATA_FIELDS)
 
 
 class BridgeError(Exception):
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+        details: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
         self.retryable = retryable
+        self.details = details or {}
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "code": self.code,
             "message": self.message,
             "retryable": self.retryable,
         }
+        for key, value in self.details.items():
+            if key not in result:
+                result[key] = value
+        return result
 
 
 class CalibreBridge:
@@ -158,10 +170,13 @@ class CalibreBridge:
             token = input_data.get("confirmationToken")
             with self._state_lock:
                 plan = self.confirmations.get(token) if isinstance(token, str) else None
-            if operation == "action.commit" and isinstance(plan, dict) and plan.get("name") == "book.export.replace":
-                export_key = self.export_scheduling_key(plan.get("destination"))
-                if export_key is not None:
-                    return export_key
+            if operation == "action.commit" and isinstance(plan, dict):
+                if plan.get("name") == "device.send.replace":
+                    return ("device", "calibre")
+                if plan.get("name") == "book.export.replace":
+                    export_key = self.export_scheduling_key(plan.get("destination"))
+                    if export_key is not None:
+                        return export_key
             library_token = plan.get("libraryToken") if isinstance(plan, dict) else None
             if isinstance(library_token, str) and library_token:
                 return ("library", library_token)
@@ -908,13 +923,20 @@ class CalibreBridge:
         force = input_data.get("force", False)
         if not isinstance(force, bool):
             raise BridgeError("invalid_request", "force must be a boolean")
+        if force:
+            raise BridgeError(
+                "confirmation_required",
+                "Replacing a reader file requires a fresh confirmation",
+            )
 
         book = self.get_book(str(library_token), book_id)
         self.find_format(book, format_name)
+        device_identity = self.device_adapter.info()
         raw_destination = input_data.get("destination")
         destination = self.default_device_destination(book, format_name) \
             if raw_destination is None else self.require_device_destination(raw_destination)
         staging = Path(tempfile.mkdtemp(prefix="omarchy-calibre-device-"))
+        retained = False
         try:
             self.run(
                 [
@@ -936,10 +958,50 @@ class CalibreBridge:
             )
             source = self.staged_device_format(staging, format_name)
             self.begin_commit()
-            sent = self.device_adapter.send(source, destination, force=force)
+            try:
+                sent = self.device_adapter.send(source, destination, force=False)
+            except DeviceError as error:
+                if error.code != "destination_exists":
+                    raise
+                target_revision = self.device_file_revision(destination)
+                if target_revision is None:
+                    raise BridgeError(
+                        "confirmation_stale",
+                        "The reader copy changed; send the book again before replacing it",
+                        retryable=True,
+                    ) from error
+                destination = target_revision[0]
+                token = self.store_confirmation({
+                    "expires": time.monotonic() + 60,
+                    "name": "device.send.replace",
+                    "libraryToken": str(library_token),
+                    "library": library,
+                    "bookId": book_id,
+                    "bookRevision": book.get("modified", ""),
+                    "format": format_name,
+                    "deviceIdentity": device_identity,
+                    "destination": destination,
+                    "targetRevision": target_revision,
+                    "source": source,
+                    "sourceRevision": self.file_revision(source),
+                    "staging": staging,
+                })
+                retained = True
+                raise BridgeError(
+                    "destination_exists",
+                    "This book already exists on the ebook reader",
+                    retryable=True,
+                    details={
+                        "confirmationToken": token,
+                        "expiresInSeconds": 60,
+                        "format": format_name,
+                        "destination": destination,
+                    },
+                ) from error
             return {**sent, "bookId": book_id, "format": format_name}
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            if not retained:
+                shutil.rmtree(staging, ignore_errors=True)
 
     def action_prepare(self, library_token: Any, input_data: Any) -> dict[str, Any]:
         library = self.require_library(library_token)
@@ -998,6 +1060,43 @@ class CalibreBridge:
         if plan["name"] == "book.metadata.fetch":
             try:
                 return self.apply_metadata_preview(plan, input_data)
+            finally:
+                self.cleanup_plan(plan)
+        if plan["name"] == "device.send.replace":
+            try:
+                current = self.get_book(plan["libraryToken"], plan["bookId"])
+                if current.get("modified", "") != plan.get("bookRevision", ""):
+                    raise BridgeError(
+                        "confirmation_stale",
+                        "The selected book changed; send it again before replacing the reader copy",
+                    )
+                self.find_format(current, plan["format"])
+                self.require_unchanged_file(
+                    plan["source"],
+                    plan["sourceRevision"],
+                    "The staged reader file changed; send the book again",
+                )
+                if self.device_adapter.info() != plan["deviceIdentity"]:
+                    raise BridgeError(
+                        "confirmation_stale",
+                        "The connected ebook reader changed; send the book again",
+                    )
+                if self.device_file_revision(plan["destination"]) != plan["targetRevision"]:
+                    raise BridgeError(
+                        "confirmation_stale",
+                        "The reader copy changed; send the book again before replacing it",
+                    )
+                self.begin_commit()
+                sent = self.device_adapter.send(
+                    plan["source"],
+                    plan["destination"],
+                    force=True,
+                )
+                return {
+                    **sent,
+                    "bookId": plan["bookId"],
+                    "format": plan["format"],
+                }
             finally:
                 self.cleanup_plan(plan)
         if plan["name"] == "book.remove":
@@ -1400,7 +1499,7 @@ class CalibreBridge:
             raise BridgeError("invalid_request", "Device destination must identify a file")
         if any(part in {".", ".."} for part in path.split("/")) or "//" in path:
             raise BridgeError("invalid_request", "Device destination cannot contain dot segments or empty path segments")
-        return value
+        return path
 
     def default_device_destination(
         self,
@@ -1448,6 +1547,68 @@ class CalibreBridge:
         filename = stem + extension
         destination = (folder.rstrip("/") + "/" + filename) if folder != "/" else "/" + filename
         return self.require_device_destination(destination)
+
+    @staticmethod
+    def device_parent_path(destination: str) -> str:
+        if destination.startswith(("carda:/", "cardb:/")):
+            prefix, relative = destination.split(":/", 1)
+            parent = relative.rsplit("/", 1)[0] if "/" in relative else ""
+            return f"{prefix}:/{parent}" if parent else f"{prefix}:/"
+        parent = destination.rsplit("/", 1)[0]
+        return parent or "/"
+
+    def device_listing_revision(self, destination: str) -> tuple[str, int, str, str] | None:
+        path = self.require_device_destination(destination)
+        listing = self.device_adapter.list(self.device_parent_path(path))
+        entries = listing.get("entries", []) if isinstance(listing, dict) else []
+        if not isinstance(entries, list):
+            raise BridgeError("tool_failed", "The ebook reader returned an invalid file listing")
+        files = [
+            item
+            for item in entries
+            if isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item.get("isDirectory") is False
+        ]
+        matches = [item for item in files if item["path"] == path]
+        if not matches:
+            matches = [item for item in files if item["path"].casefold() == path.casefold()]
+        if not matches:
+            return None
+        if len(matches) != 1:
+            raise BridgeError("tool_failed", "The ebook reader returned an ambiguous file listing")
+        entry = matches[0]
+        canonical_path = self.require_device_destination(entry["path"])
+        size = entry.get("size")
+        modified = entry.get("modified")
+        mode = entry.get("mode")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            raise BridgeError("tool_failed", "The ebook reader returned an invalid file listing")
+        if not isinstance(modified, str) or not isinstance(mode, str):
+            raise BridgeError("tool_failed", "The ebook reader returned an invalid file listing")
+        return canonical_path, size, modified, mode
+
+    def device_file_revision(self, destination: str) -> tuple[str, int, str, str, str] | None:
+        before = self.device_listing_revision(destination)
+        if before is None:
+            return None
+        with tempfile.TemporaryDirectory(prefix="omarchy-calibre-reader-snapshot-") as temporary:
+            snapshot = Path(temporary) / "reader-copy"
+            self.device_adapter.receive(before[0], snapshot)
+            try:
+                snapshot_size = snapshot.stat().st_size
+                with snapshot.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+            except OSError as error:
+                raise BridgeError("tool_failed", "The reader copy could not be verified") from error
+        after = self.device_listing_revision(before[0])
+        if after != before or snapshot_size != before[1]:
+            raise BridgeError(
+                "confirmation_stale",
+                "The reader copy changed; send the book again before replacing it",
+                retryable=True,
+            )
+        return (*before, digest)
 
     @staticmethod
     def safe_device_folder(value: Any) -> str | None:

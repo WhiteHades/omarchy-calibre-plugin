@@ -239,8 +239,23 @@ BorderSurface {
       canceled()
       return
     }
-    if (hasReview) discarded()
+    if (hasPreview) discarded()
     canceled()
+  }
+
+  function revealReviewItem(item) {
+    if (!item || !bodyScroll || !body) return
+    Qt.callLater(function() {
+      var point = item.mapToItem(body, 0, 0)
+      var margin = Style.space(8)
+      var top = point.y
+      var bottom = top + item.height
+      var maximum = Math.max(0, bodyScroll.contentHeight - bodyScroll.height)
+      if (top < bodyScroll.contentY + margin)
+        bodyScroll.contentY = Math.max(0, top - margin)
+      else if (bottom > bodyScroll.contentY + bodyScroll.height - margin)
+        bodyScroll.contentY = Math.min(maximum, bottom + margin - bodyScroll.height)
+    })
   }
 
   Component.onCompleted: resetSelection()
@@ -267,6 +282,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.loading ? "Fetching metadata"
             : (root.applying ? "Applying metadata" : (root.hasReview ? "Review metadata" : "Fetch metadata"))
@@ -278,6 +294,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: root.loading ? "Calibre is looking up common book fields."
             : (root.applying ? "Saving only the fields you selected."
@@ -329,6 +346,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.book ? root.bookSummary() : "Select a book to fetch metadata."
             color: root.foreground
@@ -338,6 +356,7 @@ BorderSurface {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Calibre will return a short review list. Existing fields stay unchanged until you apply a choice."
             color: Qt.darker(root.foreground, 1.45)
@@ -364,6 +383,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Searching for common metadata…"
             color: root.foreground
@@ -372,6 +392,7 @@ BorderSurface {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "This can take a moment."
             color: Qt.darker(root.foreground, 1.45)
@@ -395,6 +416,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.error
             color: root.urgent
@@ -432,6 +454,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.preview && root.preview.message
               ? root.preview.message
@@ -446,7 +469,7 @@ BorderSurface {
             text: "Close"
             foreground: root.foreground
             fontFamily: root.fontFamily
-            onClicked: root.canceled()
+            onClicked: root.dismiss()
           }
         }
 
@@ -458,6 +481,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Only selected changes will be applied. Untouched metadata stays as it is."
             color: Qt.darker(root.foreground, 1.35)
@@ -481,8 +505,16 @@ BorderSurface {
               readonly property bool hot: fieldMouse.containsMouse
               readonly property bool checked: root.isFieldSelected(modelData.key)
 
+              Accessible.role: Accessible.CheckBox
+              Accessible.name: fieldRow.modelData.label
+              Accessible.description: "New " + fieldRow.modelData.proposedText
+                + "; current " + fieldRow.modelData.currentText
+              Accessible.checked: fieldRow.checked
+              Accessible.onPressAction: root.toggleField(fieldRow.modelData.key)
+
               color: Style.controlFill(activeFocus, hot, root.foreground, Color.accent)
               borderSpec: Border.controlSpec(activeFocus ? "focus" : (hot ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+              onActiveFocusChanged: if (activeFocus) root.revealReviewItem(fieldRow)
 
               Keys.onPressed: function(event) {
                 if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -519,6 +551,7 @@ BorderSurface {
                   anchors.verticalCenter: parent.verticalCenter
 
                   Text {
+                    textFormat: Text.PlainText
                     anchors.centerIn: parent
                     text: fieldRow.checked ? "✓" : ""
                     color: root.foreground
@@ -533,6 +566,7 @@ BorderSurface {
                   spacing: Style.space(2)
 
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: fieldRow.modelData.label
                     color: root.foreground
@@ -543,6 +577,7 @@ BorderSurface {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: "New  " + fieldRow.modelData.proposedText
                     color: root.foreground
@@ -552,6 +587,7 @@ BorderSurface {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: "Current  " + fieldRow.modelData.currentText
                     color: Qt.darker(root.foreground, 1.55)
@@ -573,8 +609,14 @@ BorderSurface {
             activeFocusOnTab: true
 
             readonly property bool hot: coverMouse.containsMouse
+            Accessible.role: Accessible.CheckBox
+            Accessible.name: "Downloaded cover"
+            Accessible.description: root.coverInfo ? root.coverInfo.description : "New cover"
+            Accessible.checked: root.coverSelection
+            Accessible.onPressAction: root.coverSelection = !root.coverSelection
             color: Style.controlFill(activeFocus, hot, root.foreground, Color.accent)
             borderSpec: Border.controlSpec(activeFocus ? "focus" : (hot ? "hover-cursor" : "normal"), root.foreground, Color.accent)
+            onActiveFocusChanged: if (activeFocus) root.revealReviewItem(coverRow)
 
             Keys.onPressed: function(event) {
               if (event.key === Qt.Key_Space || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
@@ -611,6 +653,7 @@ BorderSurface {
                 anchors.verticalCenter: parent.verticalCenter
 
                 Text {
+                  textFormat: Text.PlainText
                   anchors.centerIn: parent
                   text: root.coverSelection ? "✓" : ""
                   color: root.foreground
@@ -639,6 +682,7 @@ BorderSurface {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   anchors.centerIn: parent
                   visible: root.coverInfo !== null && root.coverInfo.source === ""
                   text: "COVER"
@@ -655,6 +699,7 @@ BorderSurface {
                 spacing: Style.space(2)
 
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: root.coverInfo ? root.coverInfo.label : "Cover"
                   color: root.foreground
@@ -665,6 +710,7 @@ BorderSurface {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   width: parent.width
                   text: root.coverInfo ? root.coverInfo.description : "New cover"
                   color: Qt.darker(root.foreground, 1.45)
@@ -685,6 +731,7 @@ BorderSurface {
           spacing: Style.space(8)
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Saving your selected changes…"
             color: root.foreground
@@ -693,6 +740,7 @@ BorderSurface {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: "Calibre is updating the book record."
             color: Qt.darker(root.foreground, 1.45)
@@ -716,6 +764,7 @@ BorderSurface {
       spacing: Style.space(8)
 
       Text {
+        textFormat: Text.PlainText
         width: Math.max(0, parent.width - applyButton.width - cancelButton.width - parent.spacing * 2)
         text: root.hasReview && !root.loading && !root.applying && !root.error
           ? (root.selectedCount() + (root.coverSelection ? 1 : 0)) + " selected"

@@ -32,6 +32,24 @@ Panel {
   property string filterQuery: ""
   property var confirmation: null
   property int queryGeneration: 0
+  property int deviceSessionGeneration: 0
+  property string deviceRequestId: ""
+  property string deviceState: "probing"
+  property var deviceBook: null
+  property var deviceInfo: null
+  property var deviceError: null
+  property var deviceConflict: null
+  property real deviceProgressFraction: 0
+  property string deviceProgressMessage: ""
+  property int metadataSessionGeneration: 0
+  property string metadataRequestId: ""
+  property var metadataBook: null
+  property var metadataPreview: null
+  property string metadataPreviewToken: ""
+  property string metadataPreviewLibraryToken: ""
+  property string metadataError: ""
+  property bool metadataLoading: false
+  property bool metadataApplying: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -46,6 +64,9 @@ Panel {
       { id: "open", label: "Open book", key: "o" },
       { id: "metadata", label: "Edit metadata", key: "e" }
     ]
+    if (hasCapability("device.send") && selectedBook
+        && selectedBook.formats instanceof Array && selectedBook.formats.length > 0)
+      actions.push({ id: "device", label: "Send to reader", key: "d" })
     if (hasCapability("book.convert.quick")) actions.push({ id: "convert", label: "Convert", key: "c" })
     actions.push({ id: "export", label: "Export", key: "s" })
     return actions
@@ -172,16 +193,209 @@ Panel {
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
+  function isDeviceRequest(kind) {
+    return kind === "device-probe" || kind === "device-send"
+      || kind === "device-send-commit" || kind === "device-eject"
+  }
+
+  function isMetadataRequest(kind) {
+    return kind === "metadata-fetch" || kind === "metadata-apply"
+  }
+
+  function messageForError(error, fallback) {
+    return error && error.message ? String(error.message) : fallback
+  }
+
+  function stateForDeviceError(error) {
+    var code = error && error.code ? String(error.code) : ""
+    if (code === "no_device") return "no-device"
+    if (code === "device_locked") return "locked"
+    if (code === "destination_exists") return "conflict"
+    return "error"
+  }
+
+  function isCurrentDeviceRequest(context, requestId) {
+    return deviceRequestId === requestId
+      && dialogMode === "device"
+      && deviceBook !== null
+      && Number(context.sessionGeneration) === deviceSessionGeneration
+      && String(context.libraryToken || "") === String(viewState.currentLibrary || "")
+      && String(context.bookId || "") === String(deviceBook.id || "")
+  }
+
+  function isCurrentMetadataRequest(context, requestId) {
+    return metadataRequestId === requestId
+      && dialogMode === "metadata-download"
+      && metadataBook !== null
+      && Number(context.sessionGeneration) === metadataSessionGeneration
+      && String(context.libraryToken || "") === String(viewState.currentLibrary || "")
+      && String(context.bookId || "") === String(metadataBook.id || "")
+  }
+
+  function handleDeviceTerminal(event, kind, context) {
+    var current = isCurrentDeviceRequest(context, event.id)
+    var error = event.error || ({})
+    var returnedToken = String(error.confirmationToken || "")
+    if (!current) {
+      if (event.type === "failed" && returnedToken)
+        discardDeviceToken(returnedToken, context.libraryToken)
+      if ((event.type === "failed" || event.type === "cancelled")
+          && kind === "device-send-commit")
+        discardDeviceToken(context.confirmationToken, context.libraryToken)
+      return
+    }
+    deviceRequestId = ""
+    deviceProgressMessage = ""
+
+    if (event.type === "cancelled") {
+      if (kind === "device-send-commit")
+        discardDeviceToken(context.confirmationToken, context.libraryToken)
+      deviceState = deviceInfo ? "ready" : "no-device"
+      deviceConflict = null
+      return
+    }
+    if (event.type === "failed") {
+      if (kind === "device-send-commit")
+        discardDeviceToken(context.confirmationToken, context.libraryToken)
+      deviceError = event.error || ({ message: "The ebook reader operation failed." })
+      if (String(deviceError.code || "") === "destination_exists" && returnedToken) {
+        deviceState = "conflict"
+        deviceConflict = {
+          sessionGeneration: context.sessionGeneration,
+          libraryToken: context.libraryToken,
+          bookId: context.bookId,
+          format: context.format,
+          confirmationToken: returnedToken
+        }
+      } else {
+        deviceState = String(deviceError.code || "") === "destination_exists"
+          ? "error" : stateForDeviceError(deviceError)
+        deviceConflict = null
+      }
+      return
+    }
+    if (event.type !== "succeeded") return
+
+    var result = event.result || ({})
+    if (kind === "device-probe") {
+      deviceState = result.state === "error"
+        ? stateForDeviceError(result.error)
+        : String(result.state || "error")
+      deviceInfo = result.info || null
+      deviceError = result.error || null
+      deviceConflict = null
+    } else if (kind === "device-send" || kind === "device-send-commit") {
+      deviceState = "sent"
+      deviceError = null
+      deviceConflict = null
+      deviceProgressFraction = 1
+      setStatus("Book sent to " + String(deviceInfo && deviceInfo.deviceName || "ebook reader") + ".", false)
+    } else if (kind === "device-eject") {
+      deviceState = "ejected"
+      deviceError = null
+      deviceConflict = null
+      setStatus("Ebook reader ejected.", false)
+    }
+  }
+
+  function handleMetadataTerminal(event, kind, context) {
+    var current = isCurrentMetadataRequest(context, event.id)
+    var result = event.result || ({})
+
+    if (event.type === "cancelled") {
+      if (kind === "metadata-apply")
+        discardMetadataToken(context.previewToken, context.libraryToken)
+      if (!current) return
+      metadataRequestId = ""
+      metadataPreview = null
+      metadataPreviewToken = ""
+      metadataPreviewLibraryToken = ""
+      metadataLoading = false
+      metadataApplying = false
+      return
+    }
+
+    if (event.type === "failed") {
+      if (!current) return
+      metadataRequestId = ""
+      metadataLoading = false
+      metadataApplying = false
+      metadataPreviewToken = ""
+      metadataPreviewLibraryToken = ""
+      var errorCode = event.error && event.error.code ? String(event.error.code) : ""
+      var message = messageForError(event.error, "Calibre could not fetch metadata.")
+      if (kind === "metadata-fetch" && errorCode === "metadata_no_result") {
+        metadataPreview = { message: message }
+        metadataError = ""
+      } else {
+        metadataPreview = null
+        metadataError = message
+      }
+      return
+    }
+
+    if (event.type !== "succeeded") return
+    if (kind === "metadata-fetch") {
+      if (!current) {
+        discardMetadataToken(result.previewToken, context.libraryToken)
+        return
+      }
+      metadataRequestId = ""
+      metadataLoading = false
+      metadataPreview = result
+      metadataPreviewToken = String(result.previewToken || "")
+      metadataPreviewLibraryToken = String(context.libraryToken || "")
+      metadataError = ""
+      return
+    }
+
+    if (kind === "metadata-apply") {
+      if (result.book && String(context.libraryToken || "") === String(viewState.currentLibrary || ""))
+        viewState = Model.applyBook(viewState, result.book)
+      if (!current) return
+      metadataRequestId = ""
+      metadataApplying = false
+      metadataPreview = null
+      metadataPreviewToken = ""
+      metadataPreviewLibraryToken = ""
+      metadataError = ""
+      metadataSessionGeneration += 1
+      metadataBook = null
+      dialogMode = ""
+      setStatus("Downloaded metadata applied.", false)
+    }
+  }
+
   function handleBridgeMessage(event) {
     if (!event || !event.id) return
     var kind = requestKinds[event.id] || ""
     var context = requestContexts[event.id] || ({})
     viewState = Model.applyBridgeEvent(viewState, event)
-    if (event.type === "accepted" || event.type === "progress") return
+    if (event.type === "accepted" || event.type === "progress") {
+      if (event.type === "progress" && isDeviceRequest(kind)
+          && isCurrentDeviceRequest(context, event.id)) {
+        var progress = event.progress || ({})
+        if (isFinite(Number(progress.fraction)))
+          deviceProgressFraction = Math.max(0, Math.min(1, Number(progress.fraction)))
+        if (progress.message) deviceProgressMessage = String(progress.message)
+      }
+      return
+    }
 
     var isQueryRequest = kind === "query" || kind === "query-append"
     if (isQueryRequest && Number(context.queryGeneration) !== queryGeneration) {
       viewState = Model.forgetJob(viewState, event.id)
+      forgetRequest(event.id)
+      return
+    }
+
+    if (isDeviceRequest(kind)) {
+      handleDeviceTerminal(event, kind, context)
+      forgetRequest(event.id)
+      return
+    }
+    if (isMetadataRequest(kind)) {
+      handleMetadataTerminal(event, kind, context)
       forgetRequest(event.id)
       return
     }
@@ -192,7 +406,7 @@ Panel {
       return
     }
 
-    if (kind === "discard-confirmation") {
+    if (kind === "discard-confirmation" || kind === "metadata-discard" || kind === "device-discard") {
       forgetRequest(event.id)
       return
     }
@@ -412,7 +626,10 @@ Panel {
 
   function activateCursor() {
     if (focusSection === "books") selectBook(bookIndex)
-    else runPrimaryAction(primaryActions[actionIndex].id)
+    else if (primaryActions.length > 0) {
+      actionIndex = Math.max(0, Math.min(primaryActions.length - 1, actionIndex))
+      runPrimaryAction(primaryActions[actionIndex].id)
+    }
   }
 
   function runPrimaryAction(actionId) {
@@ -422,6 +639,7 @@ Panel {
       metadataEditor.loadBook()
       dialogMode = "metadata"
     }
+    else if (actionId === "device") openDeviceDialog()
     else if (actionId === "convert") {
       conversionDialog.descriptor = null
       conversionDialog.describing = false
@@ -445,6 +663,10 @@ Panel {
     if (selectedBook) {
       commands.push({ id: "open", label: "Open selected book", key: "o", keywords: "read view format" })
       commands.push({ id: "metadata", label: "Edit metadata", key: "e", keywords: "title author tags cover" })
+      if (hasCapability("book.metadata.fetch"))
+        commands.push({ id: "metadata-fetch", label: "Fetch metadata for selected book", key: "", keywords: "download cover isbn publisher tags" })
+      if (hasCapability("device.send") && selectedBook.formats instanceof Array && selectedBook.formats.length > 0)
+        commands.push({ id: "device", label: "Send selected book to reader", key: "d", keywords: "ebook device kindle kobo" })
       if (hasCapability("book.convert.quick"))
         commands.push({ id: "convert", label: "Convert selected book", key: "c", keywords: "epub azw3 pdf mobi" })
       commands.push({ id: "export", label: "Export selected book", key: "s", keywords: "save copy folder" })
@@ -464,8 +686,9 @@ Panel {
 
   function runCommand(commandId) {
     dialogMode = ""
-    if (["open", "metadata", "convert", "export"].indexOf(commandId) >= 0) runPrimaryAction(commandId)
+    if (["open", "metadata", "device", "convert", "export"].indexOf(commandId) >= 0) runPrimaryAction(commandId)
     else if (["formats", "remove"].indexOf(commandId) >= 0) runSecondaryAction(commandId)
+    else if (commandId === "metadata-fetch") openMetadataDownload()
     else if (commandId === "search") Qt.callLater(function() {
       searchField.forceActiveFocus()
       searchField.selectAll()
@@ -572,6 +795,207 @@ Panel {
       bookId: selectedBook.id,
       fields: fields
     }, "metadata")
+  }
+
+  function discardMetadataToken(value, libraryToken) {
+    var token = String(value || "")
+    if (!token) return
+    var requestId = bridge.submit("action.discard", String(libraryToken || viewState.currentLibrary || ""), {
+      confirmationToken: token
+    })
+    rememberRequest(requestId, "metadata-discard")
+  }
+
+  function discardMetadataPreview() {
+    var token = metadataPreviewToken
+    var libraryToken = metadataPreviewLibraryToken
+    metadataPreview = null
+    metadataPreviewToken = ""
+    metadataPreviewLibraryToken = ""
+    discardMetadataToken(token, libraryToken)
+  }
+
+  function openMetadataDownload() {
+    if (!selectedBook || !hasCapability("book.metadata.fetch")) return
+    if (metadataRequestId) bridge.cancel(metadataRequestId)
+    metadataRequestId = ""
+    discardMetadataPreview()
+    metadataSessionGeneration += 1
+    metadataBook = selectedBook
+    metadataError = ""
+    metadataLoading = false
+    metadataApplying = false
+    dialogMode = "metadata-download"
+    fetchMetadata()
+  }
+
+  function fetchMetadata() {
+    if (!metadataBook || dialogMode !== "metadata-download"
+        || !hasCapability("book.metadata.fetch")) return
+    if (metadataRequestId) return
+    discardMetadataPreview()
+    metadataError = ""
+    metadataLoading = true
+    metadataApplying = false
+    metadataRequestId = submit("action.run", {
+      name: "book.metadata.fetch",
+      bookId: metadataBook.id
+    }, "metadata-fetch", {
+      sessionGeneration: metadataSessionGeneration,
+      libraryToken: viewState.currentLibrary,
+      bookId: metadataBook.id
+    })
+  }
+
+  function applyMetadataPreview(selectedFields, includeCover) {
+    if (!metadataBook || !metadataPreviewToken || metadataLoading || metadataApplying
+        || metadataPreviewLibraryToken !== viewState.currentLibrary) return
+    var fields = []
+    var values = selectedFields || ({})
+    for (var field in values) fields.push(field)
+    if (includeCover === true) fields.push("cover")
+    if (fields.length === 0) return
+    metadataError = ""
+    metadataApplying = true
+    metadataRequestId = submit("action.commit", {
+      confirmationToken: metadataPreviewToken,
+      fields: fields
+    }, "metadata-apply", {
+      sessionGeneration: metadataSessionGeneration,
+      libraryToken: metadataPreviewLibraryToken,
+      bookId: metadataBook.id,
+      previewToken: metadataPreviewToken
+    })
+  }
+
+  function cancelMetadataJob() {
+    if (metadataRequestId) bridge.cancel(metadataRequestId)
+  }
+
+  function closeMetadataDialog() {
+    var requestId = metadataRequestId
+    metadataRequestId = ""
+    metadataSessionGeneration += 1
+    if (requestId) bridge.cancel(requestId)
+    discardMetadataPreview()
+    metadataBook = null
+    metadataError = ""
+    metadataLoading = false
+    metadataApplying = false
+    dialogMode = ""
+  }
+
+  function openDeviceDialog() {
+    if (!selectedBook || !hasCapability("device.send")) return
+    if (deviceRequestId) bridge.cancel(deviceRequestId)
+    discardDeviceConflict()
+    deviceRequestId = ""
+    deviceSessionGeneration += 1
+    deviceBook = selectedBook
+    dialogMode = "device"
+    deviceState = "probing"
+    deviceInfo = null
+    deviceError = null
+    deviceProgressFraction = 0
+    deviceProgressMessage = ""
+    probeReader()
+  }
+
+  function probeReader() {
+    if (!deviceBook || dialogMode !== "device" || deviceRequestId) return
+    deviceState = "probing"
+    deviceError = null
+    deviceProgressFraction = 0
+    deviceProgressMessage = ""
+    deviceRequestId = submit("device.probe", {}, "device-probe", {
+      sessionGeneration: deviceSessionGeneration,
+      libraryToken: viewState.currentLibrary,
+      bookId: deviceBook.id
+    })
+  }
+
+  function discardDeviceToken(token, libraryToken) {
+    var value = String(token || "")
+    if (!value) return
+    var id = bridge.submit("action.discard", libraryToken || viewState.currentLibrary, {
+      confirmationToken: value
+    })
+    rememberRequest(id, "device-discard")
+  }
+
+  function discardDeviceConflict() {
+    var conflict = deviceConflict
+    deviceConflict = null
+    if (conflict && conflict.confirmationToken)
+      discardDeviceToken(conflict.confirmationToken, conflict.libraryToken)
+  }
+
+  function sendBookToDevice(format, replace) {
+    if (!deviceBook || dialogMode !== "device" || !format || deviceRequestId) return
+    var requestedFormat = String(format).toUpperCase()
+    var replaceConfirmed = replace === true && canReplaceDeviceConflict(requestedFormat)
+    var conflict = replaceConfirmed ? deviceConflict : null
+    if (replaceConfirmed) deviceConflict = null
+    else discardDeviceConflict()
+    deviceState = "sending"
+    deviceError = null
+    deviceProgressFraction = 0
+    deviceProgressMessage = ""
+    var requestContext = {
+      sessionGeneration: deviceSessionGeneration,
+      libraryToken: viewState.currentLibrary,
+      bookId: deviceBook.id,
+      format: requestedFormat
+    }
+    if (replaceConfirmed) {
+      requestContext.confirmationToken = conflict.confirmationToken
+      deviceRequestId = submit("action.commit", {
+        confirmationToken: conflict.confirmationToken
+      }, "device-send-commit", requestContext)
+    } else {
+      deviceRequestId = submit("device.send", {
+        bookId: deviceBook.id,
+        format: requestedFormat
+      }, "device-send", requestContext)
+    }
+  }
+
+  function canReplaceDeviceConflict(format) {
+    var requestedFormat = String(format || "").toUpperCase()
+    return deviceState === "conflict" && deviceConflict !== null && deviceBook !== null
+      && Number(deviceConflict.sessionGeneration) === deviceSessionGeneration
+      && String(deviceConflict.libraryToken || "") === String(viewState.currentLibrary || "")
+      && String(deviceConflict.bookId || "") === String(deviceBook.id || "")
+      && String(deviceConflict.format || "") === requestedFormat
+      && String(deviceConflict.confirmationToken || "") !== ""
+  }
+
+  function ejectReader() {
+    if (!deviceBook || dialogMode !== "device" || deviceRequestId) return
+    discardDeviceConflict()
+    deviceState = "ejecting"
+    deviceError = null
+    deviceProgressFraction = 0
+    deviceProgressMessage = ""
+    deviceRequestId = submit("device.eject", {}, "device-eject", {
+      sessionGeneration: deviceSessionGeneration,
+      libraryToken: viewState.currentLibrary,
+      bookId: deviceBook.id
+    })
+  }
+
+  function cancelDeviceJob() {
+    if (deviceRequestId) bridge.cancel(deviceRequestId)
+  }
+
+  function closeDeviceDialog() {
+    var requestId = deviceRequestId
+    deviceRequestId = ""
+    deviceSessionGeneration += 1
+    if (requestId) bridge.cancel(requestId)
+    discardDeviceConflict()
+    deviceBook = null
+    dialogMode = ""
   }
 
   function addBookPaths(raw, recursive) {
@@ -785,6 +1209,7 @@ Panel {
         } else if (text === "r" || text === "R") root.refresh()
         else if (text === "o" || text === "O") root.runPrimaryAction("open")
         else if (text === "e" || text === "E") root.runPrimaryAction("metadata")
+        else if (text === "d" || text === "D") root.runPrimaryAction("device")
         else if (text === "c" || text === "C") root.runPrimaryAction("convert")
         else if (text === "s" || text === "S") root.runPrimaryAction("export")
         else if (text === "f" || text === "F") root.runSecondaryAction("formats")
@@ -811,6 +1236,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.viewState.mode === "loading" ? "Starting Calibre" : root.setup.title
             color: root.foreground
@@ -821,6 +1247,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             width: parent.width
             text: root.viewState.mode === "loading"
               ? "Checking the Calibre command-line tools and your library."
@@ -851,6 +1278,7 @@ Panel {
           }
 
           Text {
+            textFormat: Text.PlainText
             visible: root.lastError !== ""
             width: parent.width
             text: root.lastError
@@ -868,8 +1296,10 @@ Panel {
           anchors.fill: parent
           spacing: Style.space(10)
 
-          Row {
+          Flow {
+            id: toolbar
             width: parent.width
+            height: implicitHeight
             spacing: Style.space(10)
 
             CalibreIcon {
@@ -877,7 +1307,6 @@ Panel {
               width: Style.space(34)
               height: width
               iconSize: width
-              anchors.verticalCenter: parent.verticalCenter
             }
 
             Column {
@@ -897,6 +1326,7 @@ Panel {
               }
 
               Text {
+                textFormat: Text.PlainText
                 width: parent.width
                 text: root.viewState.total + (root.viewState.total === 1 ? " book" : " books")
                   + "  ·  calibre " + String(root.viewState.calibre.version || "")
@@ -922,7 +1352,6 @@ Panel {
               value: root.sortField
               foreground: root.foreground
               fontFamily: root.fontFamily
-              anchors.verticalCenter: parent.verticalCenter
               onChanged: function(value) {
                 root.sortField = value
                 root.search()
@@ -935,7 +1364,6 @@ Panel {
               tooltipText: root.sortDirection === "ascending" ? "Ascending" : "Descending"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              anchors.verticalCenter: parent.verticalCenter
               onClicked: {
                 root.sortDirection = root.sortDirection === "ascending" ? "descending" : "ascending"
                 root.search()
@@ -944,8 +1372,7 @@ Panel {
 
             TextField {
               id: searchField
-              width: Style.space(180)
-              anchors.verticalCenter: parent.verticalCenter
+              width: Math.min(Style.space(180), toolbar.width)
               placeholderText: "Search library  /"
               foreground: root.foreground
               onTextChanged: searchDelay.restart()
@@ -975,7 +1402,6 @@ Panel {
               value: root.filterQuery
               foreground: root.foreground
               fontFamily: root.fontFamily
-              anchors.verticalCenter: parent.verticalCenter
               onChanged: function(value) {
                 root.filterQuery = value
                 root.search()
@@ -987,7 +1413,6 @@ Panel {
               tooltipText: "Add another Calibre library"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              anchors.verticalCenter: parent.verticalCenter
               onClicked: if (!chooseLibrary.running) chooseLibrary.running = true
             }
 
@@ -997,7 +1422,6 @@ Panel {
               tooltipText: "Show Calibre jobs"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              anchors.verticalCenter: parent.verticalCenter
               onClicked: root.dialogMode = "jobs"
             }
 
@@ -1008,7 +1432,6 @@ Panel {
               bordered: true
               foreground: root.foreground
               fontFamily: root.fontFamily
-              anchors.verticalCenter: parent.verticalCenter
               tooltipText: "Right-click to add a folder"
               onClicked: if (!addBooks.running) addBooks.running = true
               onRightClicked: if (!addFolder.running) addFolder.running = true
@@ -1024,6 +1447,7 @@ Panel {
             radius: Style.cornerRadius
 
             Text {
+              textFormat: Text.PlainText
               id: degradedText
               anchors.fill: parent
               anchors.margins: Style.space(6)
@@ -1090,6 +1514,7 @@ Panel {
                         spacing: Style.space(2)
 
                         Text {
+                          textFormat: Text.PlainText
                           width: parent.width
                           text: (root.selectedBook && String(root.selectedBook.id) === String(modelData.id) ? "> " : "  ") + modelData.title
                           color: root.foreground
@@ -1100,6 +1525,7 @@ Panel {
                         }
 
                         Text {
+                          textFormat: Text.PlainText
                           width: parent.width
                           text: root.authors(modelData)
                           color: root.dim
@@ -1109,6 +1535,7 @@ Panel {
                         }
 
                         Text {
+                          textFormat: Text.PlainText
                           width: parent.width
                           text: root.formats(modelData)
                           color: root.dim
@@ -1202,6 +1629,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   visible: root.selectedBook === null
                   width: parent.width
                   text: "No books match this search."
@@ -1243,6 +1671,7 @@ Panel {
                       spacing: Style.space(2)
 
                       Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: modelData.label.toUpperCase()
                         color: root.dim
@@ -1253,6 +1682,7 @@ Panel {
                       }
 
                       Text {
+                        textFormat: Text.PlainText
                         width: parent.width
                         text: modelData.value
                         color: root.foreground
@@ -1332,6 +1762,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   visible: root.lastError !== ""
                   width: parent.width
                   text: root.lastError
@@ -1342,6 +1773,7 @@ Panel {
                 }
 
                 Text {
+                  textFormat: Text.PlainText
                   visible: root.selectedBook !== null
                   width: parent.width
                   text: "/ search  ·  p commands  ·  ? help  ·  r refresh"
@@ -1364,8 +1796,10 @@ Panel {
           foreground: root.foreground
           urgent: root.urgent
           fontFamily: root.fontFamily
+          downloadAvailable: root.hasCapability("book.metadata.fetch")
           onSaved: function(fields) { root.setMetadata(fields) }
           onCoverRequested: if (!coverFile.running) coverFile.running = true
+          onDownloadRequested: root.openMetadataDownload()
           onCanceled: root.dialogMode = ""
         }
 
@@ -1424,6 +1858,51 @@ Panel {
           fontFamily: root.fontFamily
           onCommandRequested: function(commandId) { root.runCommand(commandId) }
           onCanceled: root.dialogMode = ""
+        }
+
+        DeviceDialog {
+          visible: root.dialogMode === "device"
+          anchors.fill: parent
+          z: 10
+          book: root.deviceBook
+          preferredFormats: Model.parseFormatPreference(root.setting("preferredFormats", "EPUB,AZW3,PDF,MOBI"))
+          deviceState: root.deviceState
+          deviceInfo: root.deviceInfo
+          deviceError: root.deviceError
+          conflictFormat: root.deviceConflict ? String(root.deviceConflict.format || "") : ""
+          deviceCapabilities: root.viewState.capabilities.device || ({})
+          progressFraction: root.deviceProgressFraction
+          progressMessage: root.deviceProgressMessage
+          foreground: root.foreground
+          urgent: root.urgent
+          fontFamily: root.fontFamily
+          onSendRequested: function(format, replace) { root.sendBookToDevice(format, replace) }
+          onRetryRequested: root.probeReader()
+          onEjectRequested: root.ejectReader()
+          onCancelRequested: root.cancelDeviceJob()
+          onCanceled: root.closeDeviceDialog()
+        }
+
+        MetadataDownloadDialog {
+          visible: root.dialogMode === "metadata-download"
+          anchors.fill: parent
+          z: 10
+          book: root.metadataBook
+          preview: root.metadataPreview
+          loading: root.metadataLoading
+          applying: root.metadataApplying
+          error: root.metadataError
+          foreground: root.foreground
+          urgent: root.urgent
+          fontFamily: root.fontFamily
+          onFetchRequested: root.fetchMetadata()
+          onRetryRequested: root.fetchMetadata()
+          onApplyRequested: function(selectedFields, includeCover) {
+            root.applyMetadataPreview(selectedFields, includeCover)
+          }
+          onCancelJobRequested: root.cancelMetadataJob()
+          onDiscarded: root.discardMetadataPreview()
+          onCanceled: root.closeMetadataDialog()
         }
 
         HelpDialog {

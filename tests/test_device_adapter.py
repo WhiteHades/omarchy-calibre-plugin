@@ -203,6 +203,42 @@ class DeviceAdapterTest(unittest.TestCase):
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(raised.exception.action, "send")
 
+    def test_receive_copies_a_device_file_to_a_new_local_path(self) -> None:
+        destination = Path(self.temp_dir.name) / "received.epub"
+
+        def receive_runner(command: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+            result = self.runner(command, timeout)
+            if command[1:3] == ["cp", "dev:/Books/Book.epub"]:
+                Path(command[3]).write_bytes(b"reader copy")
+            return result
+
+        adapter = DeviceAdapter(executable=self.executable, runner=receive_runner)
+        result = adapter.receive("/Books/Book.epub", destination)
+
+        self.assertEqual(result, {"source": "/Books/Book.epub", "destination": str(destination)})
+        self.assertEqual(destination.read_bytes(), b"reader copy")
+        self.assertEqual(
+            self.runner.calls[-1][1:],
+            ["cp", "dev:/Books/Book.epub", str(destination)],
+        )
+
+        with self.assertRaises(DeviceError) as raised:
+            adapter.receive("/Books/Book.epub", destination)
+        self.assertEqual(raised.exception.code, "invalid_request")
+
+    def test_receive_rejects_unsafe_device_and_local_paths(self) -> None:
+        missing_parent = Path(self.temp_dir.name) / "missing" / "received.epub"
+        for source, destination in (
+            ("/Books/../private.epub", Path(self.temp_dir.name) / "private.epub"),
+            ("/Books/Book.epub", missing_parent),
+            ("/Books/Book.epub", "x" * 4097),
+        ):
+            with self.subTest(source=source, destination=destination):
+                with self.assertRaises(DeviceError) as raised:
+                    self.adapter.receive(source, destination)
+                self.assertEqual(raised.exception.code, "invalid_request")
+        self.assertEqual(self.runner.calls, [])
+
     def test_eject_returns_a_normalized_result(self) -> None:
         self.runner.add(("eject",))
 

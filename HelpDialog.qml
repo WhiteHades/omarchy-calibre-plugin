@@ -68,6 +68,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Calibre help"
           color: root.foreground
@@ -78,6 +79,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Keyboard shortcuts and local runtime status"
           color: Qt.darker(root.foreground, 1.45)
@@ -137,6 +139,7 @@ BorderSurface {
               spacing: Style.space(8)
 
               Text {
+                textFormat: Text.PlainText
                 width: Math.max(0, parent.width - shortcutKey.width - parent.spacing)
                 text: modelData.label
                 color: root.foreground
@@ -146,6 +149,7 @@ BorderSurface {
               }
 
               Text {
+                textFormat: Text.PlainText
                 id: shortcutKey
                 text: modelData.key
                 color: Color.accent
@@ -178,6 +182,7 @@ BorderSurface {
               spacing: Style.space(12)
 
               Text {
+                textFormat: Text.PlainText
                 width: Style.space(80)
                 text: modelData.label.toUpperCase()
                 color: Qt.darker(root.foreground, 1.45)
@@ -188,6 +193,7 @@ BorderSurface {
               }
 
               Text {
+                textFormat: Text.PlainText
                 width: Math.max(0, parent.width - x)
                 text: modelData.value
                 color: root.foreground

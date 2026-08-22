@@ -51,6 +51,7 @@ BorderSurface {
         spacing: Style.space(2)
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Calibre jobs"
           color: root.foreground
@@ -61,6 +62,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           width: parent.width
           text: "Track active work or clear completed results."
           color: Qt.darker(root.foreground, 1.45)
@@ -125,6 +127,7 @@ BorderSurface {
                   spacing: Style.space(2)
 
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: String(jobRow.modelData.label || "Calibre operation")
                     color: root.foreground
@@ -135,6 +138,7 @@ BorderSurface {
                   }
 
                   Text {
+                    textFormat: Text.PlainText
                     width: parent.width
                     text: root.stateLabel(jobRow.modelData)
                     color: jobRow.modelData.state === "failed" ? root.urgent : Qt.darker(root.foreground, 1.45)
@@ -176,6 +180,7 @@ BorderSurface {
         }
 
         Text {
+          textFormat: Text.PlainText
           visible: !(root.jobs instanceof Array) || root.jobs.length === 0
           width: parent.width
           text: "No Calibre jobs in this session."
