@@ -11,14 +11,19 @@ BorderSurface {
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
   property string validationError: ""
+  property bool downloadAvailable: false
 
   signal saved(var fields)
   signal coverRequested()
+  signal downloadRequested()
   signal canceled()
 
   color: Color.background
   borderSpec: Border.surfaceSpec("popups", "border", Color.popups.border, Style.normalBorderWidth)
   radius: Style.cornerRadius
+  focus: visible
+
+  Keys.onEscapePressed: root.canceled()
 
   function split(value, separator) {
     var raw = String(value || "").split(separator)
@@ -99,6 +104,7 @@ BorderSurface {
   }
 
   onBookChanged: loadBook()
+  onVisibleChanged: if (visible) Qt.callLater(function() { root.forceActiveFocus() })
   Component.onCompleted: loadBook()
 
   Column {
@@ -119,7 +125,9 @@ BorderSurface {
       }
 
       Text {
-        width: Math.max(0, parent.width - metadataIcon.width - coverButton.width - parent.spacing * 2)
+        width: Math.max(0, parent.width - metadataIcon.width - coverButton.width
+          - (root.downloadAvailable ? downloadButton.width : 0)
+          - parent.spacing * (root.downloadAvailable ? 3 : 2))
         text: "Edit metadata"
         color: root.foreground
         font.family: root.fontFamily
@@ -128,11 +136,22 @@ BorderSurface {
       }
 
       Button {
+        id: downloadButton
+        visible: root.downloadAvailable
+        text: "Fetch metadata"
+        foreground: root.foreground
+        fontFamily: root.fontFamily
+        focusable: true
+        onClicked: root.downloadRequested()
+      }
+
+      Button {
         id: coverButton
         text: root.book && root.book.cover ? "Change cover" : "Add cover"
         bordered: true
         foreground: root.foreground
         fontFamily: root.fontFamily
+        focusable: true
         onClicked: root.coverRequested()
       }
     }
