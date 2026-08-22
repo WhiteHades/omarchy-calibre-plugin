@@ -1,6 +1,7 @@
 import hashlib
 import json
 import re
+import struct
 import unittest
 from pathlib import Path
 
@@ -81,6 +82,26 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("CalibreIcon {", widget)
         self.assertIn("CalibreIcon {", panel)
         self.assertNotIn("󰂺", widget + panel)
+
+    def test_release_files_cover_installation_security_and_preview(self) -> None:
+        for name in ("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "preview.png"):
+            self.assertTrue((ROOT / name).is_file(), name)
+
+        readme = (ROOT / "README.md").read_text()
+        self.assertIn(
+            "omarchy plugin add https://github.com/WhiteHades/omarchy-calibre-plugin.git --enable",
+            readme,
+        )
+        self.assertIn("Calibre 7 or newer", readme)
+        self.assertIn("GPL-3.0-only asset", readme)
+
+        preview = (ROOT / "preview.png").read_bytes()
+        self.assertEqual(preview[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertEqual(preview[12:16], b"IHDR")
+        width, height = struct.unpack(">II", preview[16:24])
+        self.assertGreaterEqual(width, 1200)
+        self.assertGreaterEqual(height, 600)
+        self.assertLessEqual(width * height, 40_000_000)
 
     def test_visual_harness_always_self_terminates(self) -> None:
         harness = (ROOT / "tests" / "qml-panel" / "shell.qml").read_text()
