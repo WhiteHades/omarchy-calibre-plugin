@@ -188,6 +188,21 @@ class DeviceAdapterTest(unittest.TestCase):
                 self.assertEqual(raised.exception.code, "invalid_request")
         self.assertEqual(self.runner.calls, [])
 
+    def test_send_reports_an_existing_destination_separately(self) -> None:
+        self.runner.add(
+            ("cp", str(self.source), "dev:/Books/Book.epub"),
+            returncode=1,
+            stderr="File already exists: /Books/Book.epub\n",
+        )
+
+        with self.assertRaises(DeviceError) as raised:
+            self.adapter.send(self.source, "/Books/Book.epub")
+
+        self.assertEqual(raised.exception.code, "destination_exists")
+        self.assertEqual(raised.exception.message, "This book already exists on the ebook reader")
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual(raised.exception.action, "send")
+
     def test_eject_returns_a_normalized_result(self) -> None:
         self.runner.add(("eject",))
 

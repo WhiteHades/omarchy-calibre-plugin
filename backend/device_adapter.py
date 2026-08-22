@@ -17,6 +17,7 @@ DEFAULT_TIMEOUT = 120.0
 MAX_ARGUMENT_LENGTH = 4096
 NO_DEVICE_TEXT = "Unable to find a connected ebook reader."
 DEVICE_LOCKED_TEXT = "The device is locked."
+DESTINATION_EXISTS_TEXT = "File already exists:"
 COMMANDS = ("info", "books", "df", "ls", "cp", "mkdir", "touch", "cat", "rm", "eject", "test_file")
 DEVICE_COMMANDS = {
     "info": "info",
@@ -263,6 +264,15 @@ class DeviceAdapter:
                 "device_locked",
                 "The ebook reader is locked",
                 retryable=False,
+                action=action,
+                detail=detail,
+                returncode=result.returncode,
+            )
+        if action == "send" and DESTINATION_EXISTS_TEXT.lower() in detail.lower():
+            raise DeviceError(
+                "destination_exists",
+                "This book already exists on the ebook reader",
+                retryable=True,
                 action=action,
                 detail=detail,
                 returncode=result.returncode,
