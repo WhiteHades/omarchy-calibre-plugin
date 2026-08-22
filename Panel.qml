@@ -1341,6 +1341,13 @@ Panel {
     onActivated: root.close()
   }
 
+  Shortcut {
+    sequence: "Delete"
+    context: Qt.WindowShortcut
+    enabled: root.opened && !keyCatcher.blocked
+    onActivated: root.runSecondaryAction("remove")
+  }
+
   Process {
     id: chooseLibrary
     running: false

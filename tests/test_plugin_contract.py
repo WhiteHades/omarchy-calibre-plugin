@@ -249,6 +249,15 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("!keyCatcher.activeFocus", panel)
         self.assertIn("searchField.forceActiveFocus()", panel)
 
+    def test_panel_supports_the_documented_delete_key(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertRegex(
+            panel,
+            r'Shortcut\s*\{[\s\S]*?sequence:\s*"Delete"[\s\S]*?'
+            r'onActivated:\s*root\.runSecondaryAction\("remove"\)',
+        )
+
     def test_conversion_options_are_bound_to_one_dialog_session(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
         dialog = (ROOT / "ConversionDialog.qml").read_text()
