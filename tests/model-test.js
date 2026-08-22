@@ -163,4 +163,14 @@ assert.equal(Model.activeJobCount(state), 0)
 assert.equal(Model.commandMatches({ label: "Edit metadata", keywords: "title author tags" }, "author"), true)
 assert.equal(Model.commandMatches({ label: "Edit metadata", keywords: "title author tags" }, "device"), false)
 
+let history = Model.initialState()
+for (let index = 0; index < 30; index++) {
+  const id = `history-${index}`
+  history = Model.beginRequest(history, id, "History")
+  history = Model.applyBridgeEvent(history, { id, sequence: 1, type: "succeeded", result: {} })
+}
+assert.equal(Model.jobList(history).length, 25)
+assert.equal(Model.jobList(history).some(job => job.id === "history-0"), false)
+assert.equal(Model.jobList(history)[0].id, "history-29")
+
 console.log("ok - calibre model contracts")

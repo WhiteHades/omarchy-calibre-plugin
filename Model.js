@@ -1,3 +1,5 @@
+var MAX_JOB_HISTORY = 25
+
 function initialState() {
   return {
     mode: "loading",
@@ -242,7 +244,21 @@ function beginRequest(state, requestId, label) {
   var jobs = {}
   var current = next.jobs || {}
   var keys = Object.keys(current)
-  for (var i = 0; i < keys.length; i++) jobs[keys[i]] = current[keys[i]]
+  var completed = []
+  var maxOrder = 0
+  var i
+  for (i = 0; i < keys.length; i++) {
+    var job = current[keys[i]]
+    jobs[keys[i]] = job
+    maxOrder = Math.max(maxOrder, Number(job.order || 0))
+    if (job.state !== "running") completed.push(job)
+  }
+  completed.sort(function(a, b) { return Number(a.order || 0) - Number(b.order || 0) })
+  var count = keys.length
+  while (count >= MAX_JOB_HISTORY && completed.length > 0) {
+    delete jobs[completed.shift().id]
+    count--
+  }
   jobs[requestId] = {
     id: requestId,
     label: label || "Working",
@@ -250,7 +266,7 @@ function beginRequest(state, requestId, label) {
     sequence: 0,
     fraction: 0,
     message: "",
-    order: keys.length + 1
+    order: maxOrder + 1
   }
   next.jobs = jobs
   return next
