@@ -18,7 +18,7 @@ class DeviceDialogContractTest(unittest.TestCase):
         self.assertIn("Button {", self.source)
 
     def test_reader_states_and_actions_are_explicit(self) -> None:
-        for state in ("probing", "no-device", "locked", "error", "ready", "sending", "sent", "ejected"):
+        for state in ("probing", "no-device", "locked", "error", "ready", "sending", "sent", "conflict", "ejected"):
             self.assertIn('"' + state + '"', self.source)
         for signal in (
             "sendRequested",
@@ -36,6 +36,12 @@ class DeviceDialogContractTest(unittest.TestCase):
         self.assertNotIn("/Books/", self.source)
         self.assertNotIn("dev:", self.source)
         self.assertNotIn("destination", self.source)
+
+    def test_existing_reader_file_requires_an_explicit_replace_retry(self) -> None:
+        self.assertIn("signal sendRequested(string format, bool force)", self.source)
+        self.assertIn('normalizedState === "conflict"', self.source)
+        self.assertIn('text: root.normalizedState === "conflict" ? "Replace"', self.source)
+        self.assertIn('root.sendRequested(root.selectedFormat, root.normalizedState === "conflict")', self.source)
 
     def test_keyboard_escape_and_focusable_actions_are_present(self) -> None:
         self.assertIn("focus: visible", self.source)

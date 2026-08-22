@@ -22,7 +22,7 @@ BorderSurface {
   property color urgent: Color.urgent
   property string fontFamily: Style.font.family
 
-  signal sendRequested(string format)
+  signal sendRequested(string format, bool force)
   signal retryRequested()
   signal ejectRequested()
   signal cancelRequested()
@@ -42,6 +42,7 @@ BorderSurface {
   }
   readonly property bool readerReady: normalizedState === "ready"
     || normalizedState === "sending" || normalizedState === "sent"
+    || normalizedState === "conflict"
   readonly property bool retryableState: normalizedState === "no-device"
     || normalizedState === "locked" || normalizedState === "error"
     || normalizedState === "ejected"
@@ -136,6 +137,7 @@ BorderSurface {
     if (normalizedState === "no-device") return "No reader connected"
     if (normalizedState === "locked") return "Reader is locked"
     if (normalizedState === "error") return "Reader unavailable"
+    if (normalizedState === "conflict") return "Book already on reader"
     if (normalizedState === "sending") return "Sending to " + readerName
     if (normalizedState === "sent") return "Book sent"
     if (normalizedState === "ejected") return "Reader ejected"
@@ -147,6 +149,7 @@ BorderSurface {
     if (normalizedState === "no-device") return "Connect a reader, then try again."
     if (normalizedState === "locked") return "Unlock the reader, then try again."
     if (normalizedState === "error") return root.errorText
+    if (normalizedState === "conflict") return "Replace the reader copy with this library version?"
     if (normalizedState === "sending") return root.progressMessage || "Calibre is sending the selected format."
     if (normalizedState === "sent") return "The book is ready on your reader."
     if (normalizedState === "ejected") return "You can disconnect the reader safely."
@@ -224,6 +227,7 @@ BorderSurface {
           width: parent.width
           text: root.stateDescription()
           color: root.normalizedState === "error" || root.normalizedState === "locked"
+            || root.normalizedState === "conflict"
             ? root.urgent : Qt.darker(root.foreground, 1.35)
           font.family: root.fontFamily
           font.pixelSize: Style.font.body
@@ -259,6 +263,7 @@ BorderSurface {
 
           Text {
             visible: root.normalizedState === "ready" || root.normalizedState === "sending"
+              || root.normalizedState === "conflict"
             width: parent.width
             text: root.book ? String(root.book.title || "") : ""
             color: Qt.darker(root.foreground, 1.4)
@@ -270,6 +275,7 @@ BorderSurface {
 
           Dropdown {
             visible: root.normalizedState === "ready" || root.normalizedState === "sending"
+              || root.normalizedState === "conflict"
             width: parent.width
             label: "BOOK FORMAT"
             options: root.formatOptions
@@ -356,7 +362,8 @@ BorderSurface {
 
       Button {
         id: ejectButton
-        visible: root.ejectAvailable && (root.normalizedState === "ready" || root.normalizedState === "sent")
+        visible: root.ejectAvailable && (root.normalizedState === "ready"
+          || root.normalizedState === "sent" || root.normalizedState === "conflict")
         text: "Eject"
         foreground: root.foreground
         fontFamily: root.fontFamily
@@ -367,13 +374,15 @@ BorderSurface {
       Button {
         id: sendButton
         visible: root.sendAvailable && root.formatAvailable
-          && (root.normalizedState === "ready" || root.normalizedState === "sent")
-        text: root.normalizedState === "sent" ? "Send again" : "Send"
+          && (root.normalizedState === "ready" || root.normalizedState === "sent"
+            || root.normalizedState === "conflict")
+        text: root.normalizedState === "conflict" ? "Replace"
+          : (root.normalizedState === "sent" ? "Send again" : "Send")
         bordered: true
         foreground: root.foreground
         fontFamily: root.fontFamily
         focusable: true
-        onClicked: root.sendRequested(root.selectedFormat)
+        onClicked: root.sendRequested(root.selectedFormat, root.normalizedState === "conflict")
       }
     }
   }
