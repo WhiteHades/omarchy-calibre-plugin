@@ -45,6 +45,8 @@ class MetadataDownloadDialogContractTest(unittest.TestCase):
         self.assertIn("retryRequested()", self.source)
         self.assertIn("Qt.Key_Escape", self.source)
         self.assertRegex(self.source, r"CalibreIcon\s*\{")
+        self.assertIn("function localImageSource(value)", self.source)
+        self.assertIn('encodeURI("file://" + text)', self.source)
 
     def test_inactive_states_do_not_render_outside_zero_height_containers(self) -> None:
         for state in (

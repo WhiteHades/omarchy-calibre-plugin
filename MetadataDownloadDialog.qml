@@ -98,6 +98,11 @@ BorderSurface {
     return String(value)
   }
 
+  function localImageSource(value) {
+    var text = String(value || "")
+    return text.charAt(0) === "/" ? encodeURI("file://" + text) : text
+  }
+
   function valuesEqual(left, right) {
     try {
       return JSON.stringify(left) === JSON.stringify(right)
@@ -176,11 +181,11 @@ BorderSurface {
     }
     if (!raw || raw.available === false || raw.changed === false) return null
 
-    if (typeof raw === "string") return { source: raw, label: "Cover", description: "New cover" }
+    if (typeof raw === "string") return { source: localImageSource(raw), label: "Cover", description: "New cover" }
 
     var imageSource = raw.source || raw.url || raw.path || raw.data || ""
     return {
-      source: imageSource,
+      source: localImageSource(imageSource),
       label: raw.label || "Cover",
       description: raw.description || "New cover",
       name: raw.name || ""
