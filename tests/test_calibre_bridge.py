@@ -149,7 +149,7 @@ class CalibreBridgeContractTest(unittest.TestCase):
             "elif [ \"$1\" = \"info\" ]; then\n"
             f"  printf '%b' {json.dumps(info_output)}\n"
             "elif [ \"$1\" = \"ls\" ]; then\n"
-            "  printf '%s\\n' 'drwxr-xr-x 0 2026-08-22 10:11 Books/'\n"
+            "  printf '%s\\n' 'drwxr-xr-x 0 2026-08-22 10:11 Books'\n"
             "elif [ \"$1\" = \"cp\" ]; then\n"
             "  exit 0\n"
             "elif [ \"$1\" = \"eject\" ]; then\n"

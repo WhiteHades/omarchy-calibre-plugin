@@ -253,6 +253,23 @@ class MetadataDownloadTest(unittest.TestCase):
         self.assertTrue(raised.exception.retryable)
         self.assertFalse(self.bridge.staging[-1].exists())
 
+    def test_provider_failure_does_not_expose_raw_command_output(self) -> None:
+        private_path = "/home/example/private-library"
+        self.use_tools(
+            output="",
+            cover=False,
+            fetch_exit=1,
+            fetch_stderr=f"provider failed at {private_path}\n",
+        )
+
+        with self.assertRaises(BridgeError) as raised:
+            self.bridge.fetch_metadata("library-token", self.root, {"bookId": 1})
+
+        self.assertEqual(raised.exception.code, "tool_failed")
+        self.assertEqual(raised.exception.message, "Calibre metadata lookup failed")
+        self.assertNotIn(private_path, raised.exception.message)
+        self.assertFalse(self.bridge.staging[-1].exists())
+
     def test_timeout_cleans_staging(self) -> None:
         self.use_tools(output=OPF, sleep=2)
         with self.assertRaises(BridgeError) as raised:

@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ctypes
+import errno
 import hashlib
 import json
 import os
 import re
 import secrets
 import signal
+import stat
 import shutil
 import subprocess
 import sys
@@ -85,6 +88,7 @@ LIBRARY_MUTATIONS = {
     "book.convert.quick",
 }
 METADATA_DOWNLOAD_FIELDS = tuple(METADATA_FIELDS)
+FileRevision = tuple[int, int, int, int, str]
 
 
 class BridgeError(Exception):
@@ -216,7 +220,7 @@ class CalibreBridge:
         try:
             operation = request.get("operation")
             if context is not None:
-                context.report_progress({"fraction": 0.03, "message": self.operation_label(operation)})
+                context.report_progress({"message": self.operation_label(operation)})
             if operation == "bootstrap":
                 return self.bootstrap(request.get("input", {}))
             if operation == "books.query":
@@ -320,7 +324,19 @@ class CalibreBridge:
                     libraries.append(library)
 
         current = libraries[0]["token"] if libraries else ""
-        page = self.query_books(current, {"limit": page_size}) if current else self.empty_page()
+        page = (
+            self.query_books(
+                current,
+                {
+                    "limit": page_size,
+                    "search": input_data.get("search", ""),
+                    "sort": input_data.get("sort", "title"),
+                    "direction": input_data.get("direction", "ascending"),
+                },
+            )
+            if current
+            else self.empty_page()
+        )
         return {
             "calibre": calibre,
             "readiness": self.ready_state(calibre, bool(libraries)),
@@ -552,9 +568,7 @@ class CalibreBridge:
                         "Calibre found no metadata for this book",
                         retryable=True,
                     )
-                detail = (completed.stderr or output).strip()
-                message = detail.splitlines()[-1] if detail else "Calibre metadata lookup failed"
-                raise BridgeError("tool_failed", message)
+                raise BridgeError("tool_failed", "Calibre metadata lookup failed")
             if not output.strip():
                 raise BridgeError(
                     "metadata_no_result",
@@ -1172,13 +1186,26 @@ class CalibreBridge:
                         "The staged export changed; start the export again",
                     )
                 for relative, revision in plan["targetRevisions"].items():
-                    self.require_unchanged_file(
-                        destination / relative,
-                        revision,
-                        "An exported file changed; review the replacement again",
-                    )
+                    target = destination / relative
+                    if revision is None:
+                        if target.exists() or target.is_symlink():
+                            raise BridgeError(
+                                "confirmation_stale",
+                                "A new export collision appeared; review the replacement again",
+                            )
+                    else:
+                        self.require_unchanged_file(
+                            target,
+                            revision,
+                            "An exported file changed; review the replacement again",
+                        )
                 self.begin_commit()
-                files = self.publish_staged_export(staging, destination, replace=True)
+                files = self.publish_staged_export(
+                    staging,
+                    destination,
+                    replace=True,
+                    target_revisions=plan["targetRevisions"],
+                )
                 return self.export_result(destination, files)
             finally:
                 self.cleanup_plan(plan)
@@ -1659,19 +1686,41 @@ class CalibreBridge:
             raise BridgeError("format_not_found", f"{format_name} is not attached to this book")
         return found
 
-    @staticmethod
-    def file_revision(path: Path) -> tuple[int, int]:
+    @classmethod
+    def file_revision(cls, path: Path) -> FileRevision:
         try:
-            stat = path.stat()
+            descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
         except OSError as error:
             raise BridgeError("file_unavailable", "A selected format is unavailable") from error
-        return stat.st_size, stat.st_mtime_ns
+        try:
+            return cls.file_revision_descriptor(descriptor)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def file_revision_descriptor(descriptor: int) -> FileRevision:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise BridgeError("file_unavailable", "A selected format is unavailable")
+        digest = hashlib.sha256()
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        before_identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        if before_identity != after_identity:
+            raise BridgeError("file_unavailable", "A selected format changed while Calibre read it")
+        return (*after_identity, digest.hexdigest())
 
     @classmethod
     def require_unchanged_file(
         cls,
         path: Path,
-        expected: tuple[int, int],
+        expected: FileRevision,
         message: str,
     ) -> None:
         if cls.file_revision(path) != expected:
@@ -1987,29 +2036,44 @@ class CalibreBridge:
     ) -> dict[str, Any]:
         book_ids, destination = self.export_request(library_token, input_data)
         staging = self.stage_export(library, book_ids)
-        staged_files = sorted(path for path in staging.rglob("*") if path.is_file())
-        relative_files = [path.relative_to(staging) for path in staged_files]
-        collisions = [relative for relative in relative_files if (destination / relative).exists()]
-        if not collisions:
-            shutil.rmtree(staging, ignore_errors=True)
-            raise BridgeError("confirmation_not_needed", "The export does not replace any files")
-        if any(not (destination / relative).is_file() for relative in collisions):
-            shutil.rmtree(staging, ignore_errors=True)
-            raise BridgeError("invalid_request", "Export cannot replace a directory")
+        try:
+            staged_files = sorted(path for path in staging.rglob("*") if path.is_file())
+            relative_files = [path.relative_to(staging) for path in staged_files]
+            collisions = [
+                relative
+                for relative in relative_files
+                if (destination / relative).exists() or (destination / relative).is_symlink()
+            ]
+            if not collisions:
+                raise BridgeError("confirmation_not_needed", "The export does not replace any files")
+            if any(
+                (destination / relative).is_symlink()
+                or not (destination / relative).is_file()
+                for relative in collisions
+            ):
+                raise BridgeError("invalid_request", "Export cannot replace a directory")
 
-        confirmation_token = self.store_confirmation({
-            "expires": time.monotonic() + 60,
-            "name": "book.export.replace",
-            "libraryToken": library_token,
-            "staging": staging,
-            "destination": destination,
-            "stagedRevisions": {
-                relative: self.file_revision(staging / relative) for relative in relative_files
-            },
-            "targetRevisions": {
-                relative: self.file_revision(destination / relative) for relative in collisions
-            },
-        })
+            confirmation_token = self.store_confirmation({
+                "expires": time.monotonic() + 60,
+                "name": "book.export.replace",
+                "libraryToken": library_token,
+                "staging": staging,
+                "destination": destination,
+                "stagedRevisions": {
+                    relative: self.file_revision(staging / relative) for relative in relative_files
+                },
+                "targetRevisions": {
+                    relative: (
+                        self.file_revision(destination / relative)
+                        if relative in collisions
+                        else None
+                    )
+                    for relative in relative_files
+                },
+            })
+        except BaseException:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
         return {
             "confirmationToken": confirmation_token,
             "expiresInSeconds": 60,
@@ -2067,29 +2131,295 @@ class CalibreBridge:
             shutil.rmtree(staging, ignore_errors=True)
             raise
 
-    @staticmethod
-    def publish_staged_export(staging: Path, destination: Path, *, replace: bool) -> list[Path]:
+    @classmethod
+    def publish_staged_export(
+        cls,
+        staging: Path,
+        destination: Path,
+        *,
+        replace: bool,
+        target_revisions: dict[Path, FileRevision | None] | None = None,
+    ) -> list[Path]:
+        staging_root = staging.resolve()
         staged_files = sorted(path for path in staging.rglob("*") if path.is_file())
-        relative_files = [path.relative_to(staging) for path in staged_files]
-        collisions = [relative for relative in relative_files if (destination / relative).exists()]
-        if collisions and not replace:
+        relative_files: list[Path] = []
+        for source in staged_files:
+            if source.is_symlink() or not source.resolve().is_relative_to(staging_root):
+                raise BridgeError("tool_failed", "Calibre returned an unsafe staged export")
+            relative = source.relative_to(staging)
+            if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+                raise BridgeError("tool_failed", "Calibre returned an unsafe staged export path")
+            relative_files.append(relative)
+
+        if replace:
+            if target_revisions is None or set(target_revisions) != set(relative_files):
+                raise BridgeError("confirmation_stale", "The confirmed export file set changed")
+        elif target_revisions is not None:
+            raise BridgeError("invalid_request", "Unexpected export target revisions")
+        elif any(
+            (destination / relative).exists() or (destination / relative).is_symlink()
+            for relative in relative_files
+        ):
             raise BridgeError("confirmation_required", "Export would replace existing files")
-        if any(not (destination / relative).is_file() for relative in collisions):
-            raise BridgeError("invalid_request", "Export cannot replace a directory")
 
         destination.mkdir(parents=False, exist_ok=True)
-        published = []
+        try:
+            destination_stat = destination.lstat()
+        except OSError as error:
+            raise BridgeError("invalid_request", "Export destination is unavailable") from error
+        if destination.is_symlink() or not stat.S_ISDIR(destination_stat.st_mode):
+            raise BridgeError("invalid_request", "Export destination must be a directory")
+
+        published: list[Path] = []
         for source, relative in zip(staged_files, relative_files, strict=True):
-            target = destination / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            temporary = target.with_name(f".{target.name}.omarchy-{secrets.token_hex(6)}")
+            expected = target_revisions[relative] if target_revisions is not None else None
+            parent_fd = cls.open_export_parent(destination, relative.parent)
+            target_name = relative.name
             try:
-                shutil.copy2(source, temporary)
-                temporary.replace(target)
+                try:
+                    if expected is None:
+                        cls.publish_new_export_file(
+                            source,
+                            parent_fd,
+                            target_name,
+                            stale=replace,
+                        )
+                    else:
+                        cls.replace_confirmed_export_file(source, parent_fd, target_name, expected)
+                except BridgeError:
+                    raise
+                except OSError as error:
+                    raise BridgeError(
+                        "tool_failed",
+                        "Calibre could not publish the exported files",
+                    ) from error
             finally:
-                temporary.unlink(missing_ok=True)
-            published.append(target)
+                os.close(parent_fd)
+            published.append(destination / relative)
         return published
+
+    @staticmethod
+    def open_export_parent(destination: Path, relative_parent: Path) -> int:
+        flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            current_fd = os.open(destination, flags)
+            for part in relative_parent.parts:
+                if part in {"", "."}:
+                    continue
+                if part == "..":
+                    raise OSError("unsafe export parent")
+                try:
+                    os.mkdir(part, mode=0o755, dir_fd=current_fd)
+                except FileExistsError:
+                    pass
+                next_fd = os.open(part, flags, dir_fd=current_fd)
+                os.close(current_fd)
+                current_fd = next_fd
+            return current_fd
+        except OSError as error:
+            if "current_fd" in locals():
+                os.close(current_fd)
+            raise BridgeError(
+                "invalid_request",
+                "Export destination contains an unsafe directory",
+            ) from error
+
+    @staticmethod
+    def copy_export_contents(source: Path, destination_fd: int) -> None:
+        with source.open("rb") as source_file, os.fdopen(os.dup(destination_fd), "wb") as destination_file:
+            shutil.copyfileobj(source_file, destination_file)
+            destination_file.flush()
+            os.fsync(destination_file.fileno())
+
+    @classmethod
+    def export_file_revision_at(cls, parent_fd: int, name: str) -> FileRevision:
+        flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+        try:
+            return cls.file_revision_descriptor(descriptor)
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def renameat2(parent_fd: int, old_name: str, new_name: str, flags: int) -> None:
+        libc = ctypes.CDLL(None, use_errno=True)
+        function = getattr(libc, "renameat2", None)
+        if function is None:
+            raise OSError(errno.ENOSYS, "renameat2 is unavailable")
+        function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+        function.restype = ctypes.c_int
+        result = function(
+            parent_fd,
+            os.fsencode(old_name),
+            parent_fd,
+            os.fsencode(new_name),
+            flags,
+        )
+        if result != 0:
+            error_number = ctypes.get_errno()
+            raise OSError(error_number, os.strerror(error_number), new_name)
+
+    @staticmethod
+    def atomic_rename_noreplace(parent_fd: int, temporary_name: str, target_name: str) -> None:
+        CalibreBridge.renameat2(parent_fd, temporary_name, target_name, 1)
+
+    @staticmethod
+    def atomic_exchange_export_file(parent_fd: int, temporary_name: str, target_name: str) -> None:
+        CalibreBridge.renameat2(parent_fd, temporary_name, target_name, 2)
+
+    @classmethod
+    def create_export_temporary(
+        cls,
+        source: Path,
+        parent_fd: int,
+        target_name: str,
+    ) -> tuple[str, FileRevision]:
+        temporary_name = f".{target_name}.omarchy-{secrets.token_hex(6)}"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(
+            temporary_name,
+            flags,
+            stat.S_IMODE(source.stat().st_mode) or 0o600,
+            dir_fd=parent_fd,
+        )
+        try:
+            cls.copy_export_contents(source, descriptor)
+        except BaseException:
+            os.close(descriptor)
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            raise
+        os.close(descriptor)
+        try:
+            return temporary_name, cls.export_file_revision_at(parent_fd, temporary_name)
+        except BaseException:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+            raise
+
+    @classmethod
+    def publish_new_export_file(
+        cls,
+        source: Path,
+        parent_fd: int,
+        target_name: str,
+        *,
+        stale: bool,
+    ) -> None:
+        temporary_name, _ = cls.create_export_temporary(source, parent_fd, target_name)
+        try:
+            cls.atomic_rename_noreplace(parent_fd, temporary_name, target_name)
+        except FileExistsError as error:
+            if stale:
+                raise BridgeError(
+                    "confirmation_stale",
+                    "A new export collision appeared; review the replacement again",
+                ) from error
+            raise BridgeError("confirmation_required", "Export would replace existing files") from error
+        except OSError as error:
+            if error.errno in {errno.EEXIST, errno.ENOTEMPTY}:
+                if stale:
+                    raise BridgeError(
+                        "confirmation_stale",
+                        "A new export collision appeared; review the replacement again",
+                    ) from error
+                raise BridgeError("confirmation_required", "Export would replace existing files") from error
+            raise BridgeError(
+                "tool_failed",
+                "The destination does not support safe atomic export",
+            ) from error
+        finally:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except FileNotFoundError:
+                pass
+
+    @classmethod
+    def replace_confirmed_export_file(
+        cls,
+        source: Path,
+        parent_fd: int,
+        target_name: str,
+        expected: FileRevision,
+    ) -> None:
+        temporary_name, staged_revision = cls.create_export_temporary(source, parent_fd, target_name)
+        preserve_temporary = False
+        try:
+            try:
+                current = cls.export_file_revision_at(parent_fd, target_name)
+            except (BridgeError, OSError) as error:
+                raise BridgeError(
+                    "confirmation_stale",
+                    "An exported file changed; review the replacement again",
+                ) from error
+            if current != expected:
+                raise BridgeError(
+                    "confirmation_stale",
+                    "An exported file changed; review the replacement again",
+                )
+
+            try:
+                cls.atomic_exchange_export_file(parent_fd, temporary_name, target_name)
+            except OSError as error:
+                if error.errno in {errno.ENOENT, errno.EEXIST, errno.ENOTEMPTY}:
+                    raise BridgeError(
+                        "confirmation_stale",
+                        "An exported file changed; review the replacement again",
+                    ) from error
+                raise BridgeError(
+                    "tool_failed",
+                    "The destination does not support safe atomic replacement",
+                ) from error
+
+            try:
+                displaced_revision = cls.export_file_revision_at(parent_fd, temporary_name)
+            except (BridgeError, OSError):
+                displaced_revision = None
+            if displaced_revision != expected:
+                try:
+                    cls.atomic_exchange_export_file(parent_fd, temporary_name, target_name)
+                except OSError as error:
+                    preserve_temporary = True
+                    raise BridgeError(
+                        "tool_failed",
+                        "An export changed during publication; a recovery file was preserved",
+                    ) from error
+                try:
+                    rolled_back_revision = cls.export_file_revision_at(parent_fd, temporary_name)
+                except (BridgeError, OSError):
+                    preserve_temporary = True
+                else:
+                    if rolled_back_revision != staged_revision:
+                        recovery_name = f".{target_name}.omarchy-recovery-{secrets.token_hex(6)}"
+                        try:
+                            os.rename(
+                                temporary_name,
+                                recovery_name,
+                                src_dir_fd=parent_fd,
+                                dst_dir_fd=parent_fd,
+                            )
+                        except OSError:
+                            preserve_temporary = True
+                        else:
+                            temporary_name = recovery_name
+                            preserve_temporary = True
+                raise BridgeError(
+                    "confirmation_stale",
+                    "An exported file changed; review the replacement again",
+                )
+
+            os.unlink(temporary_name, dir_fd=parent_fd)
+            temporary_name = ""
+        finally:
+            if temporary_name and not preserve_temporary:
+                try:
+                    os.unlink(temporary_name, dir_fd=parent_fd)
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def export_result(destination: Path, files: list[Path]) -> dict[str, Any]:
@@ -2182,33 +2512,78 @@ class CalibreBridge:
         if offset < 0:
             raise BridgeError("invalid_request", "Query cursor is invalid")
 
-        command = [
+        index_command = [
             "calibredb",
             "list",
             "--with-library",
             str(library),
             "--for-machine",
             "--fields",
-            BOOK_FIELDS,
+            "id",
             "--sort-by",
             sort,
         ]
         if direction == "ascending":
-            command.append("--ascending")
+            index_command.append("--ascending")
         if search:
-            command.extend(["--search", search])
-        completed = self.run(command)
+            index_command.extend(["--search", search])
+        completed = self.run(index_command)
         try:
-            rows = json.loads(completed.stdout)
+            index_rows = json.loads(completed.stdout)
         except json.JSONDecodeError as error:
             raise BridgeError("tool_failed", "Calibre returned invalid book data") from error
-        if not isinstance(rows, list):
+        if not isinstance(index_rows, list):
             raise BridgeError("tool_failed", "Calibre returned an invalid book list")
-        page_rows = rows[offset : offset + limit]
-        items = [self.normalize_book(row) for row in page_rows]
-        next_offset = offset + len(page_rows)
-        next_cursor = str(next_offset) if next_offset < len(rows) else None
-        return {"items": items, "total": len(rows), "nextCursor": next_cursor}
+
+        book_ids: list[int] = []
+        for row in index_rows:
+            book_id = row.get("id") if isinstance(row, dict) else None
+            if not isinstance(book_id, int) or isinstance(book_id, bool) or book_id < 1:
+                raise BridgeError("tool_failed", "Calibre returned an invalid book index")
+            book_ids.append(book_id)
+
+        page_ids = book_ids[offset : offset + limit]
+        if page_ids:
+            id_filter = " or ".join(f"id:{book_id}" for book_id in page_ids)
+            detail_search = f"({search}) and ({id_filter})" if search else id_filter
+            detail_command = [
+                "calibredb",
+                "list",
+                "--with-library",
+                str(library),
+                "--for-machine",
+                "--fields",
+                BOOK_FIELDS,
+                "--sort-by",
+                sort,
+                "--limit",
+                str(len(page_ids)),
+                "--search",
+                detail_search,
+            ]
+            if direction == "ascending":
+                detail_command.append("--ascending")
+            completed = self.run(detail_command)
+            try:
+                detail_rows = json.loads(completed.stdout)
+            except json.JSONDecodeError as error:
+                raise BridgeError("tool_failed", "Calibre returned invalid book data") from error
+            if not isinstance(detail_rows, list):
+                raise BridgeError("tool_failed", "Calibre returned an invalid book list")
+            rows_by_id = {
+                row.get("id"): row
+                for row in detail_rows
+                if isinstance(row, dict) and row.get("id") in page_ids
+            }
+            if any(book_id not in rows_by_id for book_id in page_ids):
+                raise BridgeError("tool_failed", "Calibre returned an incomplete book page")
+            items = [self.normalize_book(rows_by_id[book_id]) for book_id in page_ids]
+        else:
+            items = []
+
+        next_offset = offset + len(page_ids)
+        next_cursor = str(next_offset) if next_offset < len(book_ids) else None
+        return {"items": items, "total": len(book_ids), "nextCursor": next_cursor}
 
     @staticmethod
     def normalize_book(row: Any) -> dict[str, Any]:
@@ -2286,6 +2661,74 @@ class CalibreBridge:
         active_context = context or getattr(self._operation_local, "context", None)
         if active_context is not None:
             active_context.check_cancelled()
+        lock_file = self.acquire_calibredb_lock(active_context) if Path(command[0]).name == "calibredb" else None
+        try:
+            return self.run_command(
+                command,
+                timeout=timeout,
+                active_context=active_context,
+                cwd=cwd,
+                commit=commit,
+                check=check,
+            )
+        finally:
+            if lock_file is not None:
+                try:
+                    import fcntl
+
+                    fcntl.flock(lock_file, fcntl.LOCK_UN)
+                finally:
+                    os.close(lock_file)
+
+    @staticmethod
+    def acquire_calibredb_lock(context: OperationContext | None) -> int:
+        import fcntl
+
+        runtime_value = os.environ.get("XDG_RUNTIME_DIR", "")
+        runtime = Path(runtime_value) if runtime_value else Path(tempfile.gettempdir()) / f"omarchy-calibre-{os.getuid()}"
+        try:
+            if not runtime_value:
+                runtime.mkdir(mode=0o700, exist_ok=True)
+            runtime_stat = runtime.lstat()
+            if not stat.S_ISDIR(runtime_stat.st_mode) or runtime_stat.st_uid != os.getuid():
+                raise OSError("unsafe runtime directory")
+            flags = os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+            lock_file = os.open(runtime / "omarchy-calibre-calibredb.lock", flags, 0o600)
+            lock_stat = os.fstat(lock_file)
+            if not stat.S_ISREG(lock_stat.st_mode) or lock_stat.st_uid != os.getuid():
+                os.close(lock_file)
+                raise OSError("unsafe lock file")
+        except OSError as error:
+            raise BridgeError(
+                "tool_failed",
+                "Calibre command coordination is unavailable",
+                retryable=True,
+            ) from error
+
+        try:
+            while True:
+                try:
+                    fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return lock_file
+                except BlockingIOError:
+                    if context is not None:
+                        context.check_cancelled()
+                    time.sleep(0.025)
+        except BaseException:
+            os.close(lock_file)
+            raise
+
+    def run_command(
+        self,
+        command: list[str],
+        *,
+        timeout: float,
+        active_context: OperationContext | None,
+        cwd: Path | None,
+        commit: bool,
+        check: bool,
+    ) -> subprocess.CompletedProcess[str]:
+        if active_context is not None:
             if commit and not active_context.begin_commit():
                 active_context.check_cancelled()
                 raise BridgeError("operation_finished", "The Calibre operation is no longer active")
@@ -2302,9 +2745,12 @@ class CalibreBridge:
                 start_new_session=True,
             )
         except FileNotFoundError as error:
-            raise BridgeError("capability_unavailable", f"Required command is unavailable: {command[0]}") from error
+            raise BridgeError(
+                "capability_unavailable",
+                f"Required command is unavailable: {Path(command[0]).name}",
+            ) from error
         except OSError as error:
-            raise BridgeError("tool_failed", f"Calibre command could not start: {command[0]}") from error
+            raise BridgeError("tool_failed", "Calibre could not start the requested operation") from error
 
         if active_context is not None:
             active_context.register_process_terminator(
@@ -2320,15 +2766,24 @@ class CalibreBridge:
             except subprocess.TimeoutExpired:
                 self.terminate_process_group(process, force=True)
                 stdout, stderr = process.communicate()
-            raise BridgeError("timeout", f"Calibre command timed out: {command[0]}", retryable=True) from error
+            raise BridgeError(
+                "timeout",
+                f"Calibre command timed out: {Path(command[0]).name}",
+                retryable=True,
+            ) from error
 
         if active_context is not None:
             active_context.check_cancelled()
         completed = subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
         if check and process.returncode != 0:
             detail = (stderr or stdout or "").strip()
-            message = detail.splitlines()[-1] if detail else f"Calibre command failed: {command[0]}"
-            raise BridgeError("tool_failed", message)
+            if Path(command[0]).name == "calibredb" and "another calibre program" in detail.lower():
+                raise BridgeError(
+                    "calibre_busy",
+                    "Calibre is busy. Wait for the active library task, then retry",
+                    retryable=True,
+                )
+            raise BridgeError("tool_failed", "Calibre could not complete the requested operation")
         return completed
 
     @staticmethod

@@ -119,7 +119,7 @@ class DeviceAdapterTest(unittest.TestCase):
         self.runner.add(
             ("ls", "-l", "/"),
             stdout=(
-                "drwxr-xr-x 0 2026-08-22 10:11 Books/\n"
+                "drwxr-xr-x 0 2026-08-22 10:11 Books\n"
                 "-rw-r--r-- 42 2026-08-22 10:12 A book.epub\n"
             ),
         )
@@ -202,6 +202,8 @@ class DeviceAdapterTest(unittest.TestCase):
         self.assertEqual(raised.exception.message, "This book already exists on the ebook reader")
         self.assertTrue(raised.exception.retryable)
         self.assertEqual(raised.exception.action, "send")
+        self.assertNotIn("detail", raised.exception.as_dict())
+        self.assertNotIn("/Books/Book.epub", str(raised.exception.as_dict()))
 
     def test_receive_copies_a_device_file_to_a_new_local_path(self) -> None:
         destination = Path(self.temp_dir.name) / "received.epub"

@@ -59,8 +59,6 @@ class DeviceError(Exception):
         }
         if self.action is not None:
             result["action"] = self.action
-        if self.detail:
-            result["detail"] = self.detail
         if self.returncode is not None:
             result["returncode"] = self.returncode
         return result
@@ -477,8 +475,7 @@ class DeviceAdapter:
             except ValueError as error:
                 raise DeviceError("invalid_output", "ebook-device returned an invalid file size", action="list") from error
             name = fields[4]
-            is_directory = name.endswith("/")
-            name = name.rstrip("/") if is_directory else name
+            is_directory = fields[0].startswith("d")
             if not name or name in {".", ".."} or "/" in name:
                 raise DeviceError("invalid_output", "ebook-device returned an invalid file name", action="list")
             entry_path = current_path.rstrip("/") + "/" + name
