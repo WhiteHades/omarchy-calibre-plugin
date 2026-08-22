@@ -26,6 +26,9 @@ Panel {
   property int actionIndex: 0
   property bool cursorActive: false
   property bool bootstrapped: false
+  property int bootstrapGeneration: 0
+  property string bootstrapRequestId: ""
+  property bool openedFromHotkey: false
   property string dialogMode: ""
   property string sortField: "title"
   property string sortDirection: "ascending"
@@ -77,23 +80,38 @@ Panel {
   ]
 
   function open() {
+    openedFromHotkey = false
+    setCenterHoverRevealSuppressed(false)
     root.controller.show()
-    if (!bootstrapped) bootstrap()
+  }
+
+  function openFromHotkey() {
+    openedFromHotkey = true
+    root.controller.show()
+    Qt.callLater(function() {
+      if (root.opened) setCenterHoverRevealSuppressed(true)
+    })
   }
 
   function close() {
+    setCenterHoverRevealSuppressed(false)
     root.controller.hide()
   }
 
   function toggle() {
     if (opened) close()
-    else open()
+    else openFromHotkey()
   }
 
   function switchPanel(direction) {
     if (bar && typeof bar.switchPanelFrom === "function")
       return bar.switchPanelFrom(barIdentity, direction)
     return false
+  }
+
+  function setCenterHoverRevealSuppressed(value) {
+    if (bar && "centerHoverRevealSuppressed" in bar)
+      bar.centerHoverRevealSuppressed = value
   }
 
   function rememberRequest(id, kind, context) {
@@ -162,13 +180,17 @@ Panel {
     setStatus("", false)
     queryGeneration += 1
     cancelOutstandingQueries()
+    bootstrapGeneration += 1
+    if (bootstrapRequestId) bridge.cancel(bootstrapRequestId)
+    var generation = bootstrapGeneration
     var libraries = rememberedLibraries().slice()
     if (extraLibrary && libraries.indexOf(extraLibrary) === -1) libraries.unshift(extraLibrary)
     var id = bridge.submit("bootstrap", "", {
       rememberedLibraries: libraries,
       pageSize: Number(setting("pageSize", 50))
     })
-    rememberRequest(id, "bootstrap")
+    bootstrapRequestId = id
+    rememberRequest(id, "bootstrap", { bootstrapGeneration: generation })
   }
 
   function refresh() {
@@ -388,6 +410,12 @@ Panel {
       forgetRequest(event.id)
       return
     }
+
+    if (kind === "bootstrap" && Number(context.bootstrapGeneration) !== bootstrapGeneration) {
+      forgetRequest(event.id)
+      return
+    }
+    if (kind === "bootstrap") bootstrapRequestId = ""
 
     if (isDeviceRequest(kind)) {
       handleDeviceTerminal(event, kind, context)

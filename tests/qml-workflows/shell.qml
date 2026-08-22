@@ -103,6 +103,33 @@ ShellRoot {
       state.capabilities = { actions: ["book.metadata.fetch", "device.send"], device: {} }
       panel.viewState = state
 
+      panel.bootstrapGeneration = 2
+      panel.bootstrapRequestId = "bootstrap-new"
+      panel.requestKinds = ({ "bootstrap-old": "bootstrap", "bootstrap-new": "bootstrap" })
+      panel.requestContexts = ({
+        "bootstrap-old": { bootstrapGeneration: 1 },
+        "bootstrap-new": { bootstrapGeneration: 2 }
+      })
+      panel.handleBridgeMessage({
+        id: "bootstrap-old",
+        sequence: 1,
+        type: "succeeded",
+        result: {
+          readiness: { state: "ready" },
+          currentLibrary: "library-a",
+          libraries: [{ token: "library-a", name: "Old library" }],
+          page: { items: [bookA], total: 1 },
+          capabilities: { actions: [] }
+        }
+      })
+      root.expect(panel.viewState.currentLibrary === "library-b", "stale bootstrap replaced the active library")
+      root.expect(panel.bootstrapRequestId === "bootstrap-new", "stale bootstrap cleared the active request")
+
+      panel.setCenterHoverRevealSuppressed(true)
+      root.expect(fakeBar.centerHoverRevealSuppressed === true, "panel did not suppress the native center reveal")
+      panel.setCenterHoverRevealSuppressed(false)
+      root.expect(fakeBar.centerHoverRevealSuppressed === false, "panel did not release the native center reveal")
+
       panel.dialogMode = "metadata-download"
       panel.metadataSessionGeneration = 2
       panel.metadataBook = bookB

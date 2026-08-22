@@ -153,6 +153,25 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("queryGeneration: generation", panel)
         self.assertIn("Model.forgetJob(viewState, event.id)", panel)
 
+    def test_repeated_bootstraps_cannot_restore_stale_state(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("property int bootstrapGeneration: 0", panel)
+        self.assertIn("property string bootstrapRequestId:", panel)
+        self.assertIn("bridge.cancel(bootstrapRequestId)", panel)
+        self.assertIn("context.bootstrapGeneration", panel)
+        self.assertIn("bootstrapGeneration: generation", panel)
+
+    def test_panel_matches_the_native_hotkey_reveal_lifecycle(self) -> None:
+        widget = (ROOT / "BarWidget.qml").read_text()
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertIn("panelLoader.item.openFromHotkey()", widget)
+        self.assertRegex(panel, r"function\s+openFromHotkey\s*\(")
+        self.assertRegex(panel, r"function\s+setCenterHoverRevealSuppressed\s*\(")
+        self.assertIn("setCenterHoverRevealSuppressed(false)", panel)
+        self.assertIn("setCenterHoverRevealSuppressed(true)", panel)
+
     def test_secondary_actions_live_in_a_keyboard_command_palette(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
         palette = (ROOT / "CommandPalette.qml").read_text()

@@ -14,7 +14,8 @@ BarWidget {
     : false
 
   function open() {
-    if (panelLoader.item) panelLoader.item.open()
+    if (panelLoader.item && panelLoader.item.openFromHotkey)
+      panelLoader.item.openFromHotkey()
   }
 
   function close() {
