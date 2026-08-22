@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     container: archlinux:base-devel
     timeout-minutes: 20
-    env:
-      OMARCHY_SOURCE: ${{ runner.temp }}/omarchy
 
     steps:
       - name: Check out repository
@@ -27,6 +25,7 @@ jobs:
       - name: Fetch pinned Omarchy source
         env:
           OMARCHY_REVISION: ed7bae4ac5a570e9df307486e0202fdafcc6ee24
+          OMARCHY_SOURCE: ${{ runner.temp }}/omarchy
         run: |
           git init "$OMARCHY_SOURCE"
           git -C "$OMARCHY_SOURCE" remote add origin https://github.com/basecamp/omarchy.git
@@ -34,6 +33,8 @@ jobs:
           git -C "$OMARCHY_SOURCE" checkout --detach FETCH_HEAD
 
       - name: Validate plugin manifest
+        env:
+          OMARCHY_SOURCE: ${{ runner.temp }}/omarchy
         run: bash "$OMARCHY_SOURCE/bin/omarchy-plugin-validate" .
 
       - name: Run Python tests
