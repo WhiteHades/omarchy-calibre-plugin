@@ -232,7 +232,41 @@ function beginRequest(state, requestId, label) {
     state: "running",
     sequence: 0,
     fraction: 0,
-    message: ""
+    message: "",
+    order: keys.length + 1
+  }
+  next.jobs = jobs
+  return next
+}
+
+function jobList(state) {
+  var jobs = state && state.jobs ? state.jobs : {}
+  var values = []
+  var keys = Object.keys(jobs)
+  for (var i = 0; i < keys.length; i++) values.push(jobs[keys[i]])
+  values.sort(function(a, b) {
+    var aRunning = a.state === "running" ? 1 : 0
+    var bRunning = b.state === "running" ? 1 : 0
+    if (aRunning !== bRunning) return bRunning - aRunning
+    return Number(b.order || 0) - Number(a.order || 0)
+  })
+  return values
+}
+
+function activeJobCount(state) {
+  var values = jobList(state)
+  var count = 0
+  for (var i = 0; i < values.length; i++) if (values[i].state === "running") count++
+  return count
+}
+
+function forgetJob(state, requestId) {
+  if (!state || !state.jobs || !state.jobs[requestId]) return state
+  var next = copyState(state)
+  var jobs = {}
+  var keys = Object.keys(state.jobs)
+  for (var i = 0; i < keys.length; i++) {
+    if (keys[i] !== requestId) jobs[keys[i]] = state.jobs[keys[i]]
   }
   next.jobs = jobs
   return next
@@ -305,6 +339,9 @@ if (typeof module !== "undefined") {
     formatBytes: formatBytes,
     beginRequest: beginRequest,
     applyBridgeEvent: applyBridgeEvent,
+    jobList: jobList,
+    activeJobCount: activeJobCount,
+    forgetJob: forgetJob,
     commandMatches: commandMatches
   }
 }

@@ -134,6 +134,8 @@ assert.equal(Model.formatBytes(2980312), "2.8 MiB")
 assert.equal(Model.formatBytes(0), "0 B")
 
 state = Model.beginRequest(state, "convert-1", "Convert Dune")
+assert.equal(Model.activeJobCount(state), 1)
+assert.deepEqual(Model.jobList(state).map(job => job.id), ["convert-1"])
 state = Model.applyBridgeEvent(state, {
   id: "convert-1",
   sequence: 1,
@@ -144,6 +146,14 @@ assert.equal(state.jobs["convert-1"].state, "running")
 assert.equal(state.jobs["convert-1"].fraction, 0.5)
 state = Model.applyBridgeEvent(state, { id: "convert-1", sequence: 2, type: "succeeded", result: {} })
 assert.equal(state.jobs["convert-1"].state, "succeeded")
+assert.equal(Model.activeJobCount(state), 0)
+state = Model.forgetJob(state, "convert-1")
+assert.deepEqual(Model.jobList(state), [])
+
+state = Model.beginRequest(state, "query-2", "Search library")
+state = Model.applyBridgeEvent(state, { id: "query-2", sequence: 1, type: "cancelled" })
+assert.equal(state.jobs["query-2"].state, "cancelled")
+assert.equal(Model.activeJobCount(state), 0)
 
 assert.equal(Model.commandMatches({ label: "Edit metadata", keywords: "title author tags" }, "author"), true)
 assert.equal(Model.commandMatches({ label: "Edit metadata", keywords: "title author tags" }, "device"), false)

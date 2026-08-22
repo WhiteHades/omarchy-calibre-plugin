@@ -37,6 +37,8 @@ Panel {
   readonly property string fontFamily: bar ? bar.fontFamily : Style.font.family
   readonly property var selectedBook: viewState.selectedBook
   readonly property var setup: Model.setupContent(viewState)
+  readonly property var jobs: Model.jobList(viewState)
+  readonly property int activeJobCount: Model.activeJobCount(viewState)
   readonly property var primaryActions: {
     var actions = [
       { id: "open", label: "Open book", key: "o" },
@@ -157,6 +159,12 @@ Panel {
     viewState = Model.applyBridgeEvent(viewState, event)
     if (event.type === "accepted" || event.type === "progress") return
 
+    if (event.type === "cancelled") {
+      setStatus("Calibre operation cancelled.", false)
+      forgetRequest(event.id)
+      return
+    }
+
     if (event.type === "failed") {
       var errorCode = event.error && event.error.code ? String(event.error.code) : ""
       if (kind === "export" && errorCode === "confirmation_required") {
@@ -212,6 +220,8 @@ Panel {
       setStatus("Removed " + removed + (removed === 1 ? " book." : " books."), false)
       search()
     }
+    if (kind === "bootstrap" || kind === "query" || kind === "query-append")
+      viewState = Model.forgetJob(viewState, event.id)
     forgetRequest(event.id)
   }
 
@@ -277,6 +287,16 @@ Panel {
     var returnMode = confirmation && confirmation.returnMode ? confirmation.returnMode : ""
     confirmation = null
     dialogMode = returnMode
+  }
+
+  function cancelJob(requestId) {
+    bridge.cancel(requestId)
+    setStatus("Cancellation requested.", false)
+  }
+
+  function forgetJob(requestId) {
+    viewState = Model.forgetJob(viewState, requestId)
+    if (jobs.length <= 1 && activeJobCount === 0) dialogMode = ""
   }
 
   function runSetupAction(actionId) {
@@ -855,6 +875,16 @@ Panel {
             }
 
             Button {
+              visible: root.jobs.length > 0
+              text: root.activeJobCount > 0 ? "Jobs " + root.activeJobCount : "Jobs"
+              tooltipText: "Show Calibre jobs"
+              foreground: root.foreground
+              fontFamily: root.fontFamily
+              anchors.verticalCenter: parent.verticalCenter
+              onClicked: root.dialogMode = "jobs"
+            }
+
+            Button {
               id: addBooksButton
               text: "Add books"
               iconText: "+"
@@ -1242,6 +1272,19 @@ Panel {
           onOpenRequested: function(format) { root.openFormat(format) }
           onAddRequested: if (!formatFile.running) formatFile.running = true
           onRemoveRequested: function(format) { root.removeFormat(format) }
+          onCanceled: root.dialogMode = ""
+        }
+
+        JobsDialog {
+          visible: root.dialogMode === "jobs"
+          anchors.fill: parent
+          z: 10
+          jobs: root.jobs
+          foreground: root.foreground
+          urgent: root.urgent
+          fontFamily: root.fontFamily
+          onCancelRequested: function(requestId) { root.cancelJob(requestId) }
+          onForgetRequested: function(requestId) { root.forgetJob(requestId) }
           onCanceled: root.dialogMode = ""
         }
 

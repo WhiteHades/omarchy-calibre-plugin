@@ -108,6 +108,15 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn('Quickshell.execDetached(["xdg-open", path])', panel)
         self.assertNotIn('Quickshell.execDetached(["bash"', panel)
 
+    def test_job_cancellation_stays_inside_the_bridge_protocol(self) -> None:
+        bridge = (ROOT / "CalibreBridge.qml").read_text()
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertRegex(bridge, r"function\s+cancel\s*\(requestId\)")
+        self.assertIn('type: "cancel"', bridge)
+        self.assertIn("JobsDialog {", panel)
+        self.assertIn("bridge.cancel(requestId)", panel)
+
     def test_tracked_sources_do_not_publish_a_private_home_path(self) -> None:
         private_home = "/home/" + "efaz"
         for path in ROOT.rglob("*"):

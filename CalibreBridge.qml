@@ -41,6 +41,16 @@ Item {
     return id
   }
 
+  function cancel(requestId) {
+    var id = String(requestId || "")
+    if (!id) return
+    enqueue(JSON.stringify({
+      protocol: 1,
+      type: "cancel",
+      id: id
+    }))
+  }
+
   function enqueue(line) {
     if (bridgeProcess.running) {
       bridgeProcess.write(line + "\n")
