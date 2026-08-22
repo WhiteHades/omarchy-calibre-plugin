@@ -398,6 +398,42 @@ Panel {
     }, "prepare-remove")
   }
 
+  function commandList() {
+    var commands = []
+    if (selectedBook) {
+      commands.push({ id: "open", label: "Open selected book", key: "o", keywords: "read view format" })
+      commands.push({ id: "metadata", label: "Edit metadata", key: "e", keywords: "title author tags cover" })
+      if (hasCapability("book.convert.quick"))
+        commands.push({ id: "convert", label: "Convert selected book", key: "c", keywords: "epub azw3 pdf mobi" })
+      commands.push({ id: "export", label: "Export selected book", key: "s", keywords: "save copy folder" })
+      commands.push({ id: "formats", label: "Manage book formats", key: "f", keywords: "add replace remove file" })
+      commands.push({ id: "remove", label: "Remove selected book", key: "x", keywords: "delete trash library" })
+    }
+    commands.push({ id: "search", label: "Search library", key: "/", keywords: "find filter query" })
+    commands.push({ id: "add-files", label: "Add book files", key: "", keywords: "import books" })
+    commands.push({ id: "add-folder", label: "Add books from folder", key: "", keywords: "import recurse directory" })
+    commands.push({ id: "choose-library", label: "Add another library", key: "", keywords: "switch choose folder" })
+    commands.push({ id: "refresh", label: "Refresh Calibre library", key: "r", keywords: "reload rescan" })
+    if (jobs.length > 0)
+      commands.push({ id: "jobs", label: "Show Calibre jobs", key: "", keywords: "progress cancel history" })
+    return commands
+  }
+
+  function runCommand(commandId) {
+    dialogMode = ""
+    if (["open", "metadata", "convert", "export"].indexOf(commandId) >= 0) runPrimaryAction(commandId)
+    else if (["formats", "remove"].indexOf(commandId) >= 0) runSecondaryAction(commandId)
+    else if (commandId === "search") Qt.callLater(function() {
+      searchField.forceActiveFocus()
+      searchField.selectAll()
+    })
+    else if (commandId === "add-files" && !addBooks.running) addBooks.running = true
+    else if (commandId === "add-folder" && !addFolder.running) addFolder.running = true
+    else if (commandId === "choose-library" && !chooseLibrary.running) chooseLibrary.running = true
+    else if (commandId === "refresh") refresh()
+    else if (commandId === "jobs") dialogMode = "jobs"
+  }
+
   function preferredFormat(book) {
     var preferences = Model.parseFormatPreference(setting("preferredFormats", "EPUB,AZW3,PDF,MOBI"))
     var wanted = Model.preferredFormat(book, preferences)
@@ -697,6 +733,7 @@ Panel {
         else if (text === "c" || text === "C") root.runPrimaryAction("convert")
         else if (text === "s" || text === "S") root.runPrimaryAction("export")
         else if (text === "f" || text === "F") root.runSecondaryAction("formats")
+        else if (text === "p" || text === "P" || text === ":") root.dialogMode = "commands"
       }
 
       Item {
@@ -1247,6 +1284,16 @@ Panel {
                   font.pixelSize: Style.font.caption
                   wrapMode: Text.WordWrap
                 }
+
+                Text {
+                  visible: root.selectedBook !== null
+                  width: parent.width
+                  text: "/ search  ·  p commands  ·  r refresh"
+                  color: Qt.darker(root.foreground, 1.65)
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+                  horizontalAlignment: Text.AlignHCenter
+                }
               }
             }
           }
@@ -1309,6 +1356,17 @@ Panel {
           fontFamily: root.fontFamily
           onCancelRequested: function(requestId) { root.cancelJob(requestId) }
           onForgetRequested: function(requestId) { root.forgetJob(requestId) }
+          onCanceled: root.dialogMode = ""
+        }
+
+        CommandPalette {
+          visible: root.dialogMode === "commands"
+          anchors.fill: parent
+          z: 10
+          commands: root.commandList()
+          foreground: root.foreground
+          fontFamily: root.fontFamily
+          onCommandRequested: function(commandId) { root.runCommand(commandId) }
           onCanceled: root.dialogMode = ""
         }
 

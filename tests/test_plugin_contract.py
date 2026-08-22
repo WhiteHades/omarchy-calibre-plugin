@@ -118,6 +118,16 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("JobsDialog {", panel)
         self.assertIn("bridge.cancel(requestId)", panel)
 
+    def test_secondary_actions_live_in_a_keyboard_command_palette(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+        palette = (ROOT / "CommandPalette.qml").read_text()
+
+        self.assertIn("CommandPalette {", panel)
+        self.assertIn("Model.commandMatches", palette)
+        self.assertIn('text === "p"', panel)
+        for command_id in ("add-files", "add-folder", "choose-library", "refresh", "jobs"):
+            self.assertIn(f'id: "{command_id}"', panel)
+
     def test_tracked_sources_do_not_publish_a_private_home_path(self) -> None:
         private_home = "/home/" + "efaz"
         for path in ROOT.rglob("*"):
