@@ -118,6 +118,13 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("JobsDialog {", panel)
         self.assertIn("bridge.cancel(requestId)", panel)
 
+    def test_confirmation_cancel_discards_the_staged_bridge_plan(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+
+        self.assertRegex(panel, r"function\s+cancelConfirmation\s*\(")
+        self.assertIn('bridge.submit("action.discard"', panel)
+        self.assertIn("confirmationToken: pending.token", panel)
+
     def test_secondary_actions_live_in_a_keyboard_command_palette(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
         palette = (ROOT / "CommandPalette.qml").read_text()

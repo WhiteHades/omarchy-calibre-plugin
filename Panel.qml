@@ -166,6 +166,11 @@ Panel {
       return
     }
 
+    if (kind === "discard-confirmation") {
+      forgetRequest(event.id)
+      return
+    }
+
     if (event.type === "failed") {
       var errorCode = event.error && event.error.code ? String(event.error.code) : ""
       if (kind === "export" && errorCode === "confirmation_required") {
@@ -285,9 +290,16 @@ Panel {
   }
 
   function cancelConfirmation() {
-    var returnMode = confirmation && confirmation.returnMode ? confirmation.returnMode : ""
+    var pending = confirmation
+    var returnMode = pending && pending.returnMode ? pending.returnMode : ""
     confirmation = null
     dialogMode = returnMode
+    if (pending && pending.token) {
+      var id = bridge.submit("action.discard", viewState.currentLibrary, {
+        confirmationToken: pending.token
+      })
+      rememberRequest(id, "discard-confirmation")
+    }
   }
 
   function cancelJob(requestId) {
