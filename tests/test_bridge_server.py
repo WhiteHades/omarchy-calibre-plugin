@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import threading
+import time
 import unittest
+from unittest.mock import patch
 from typing import Any
 
-from backend.bridge_server import OperationScheduler, SchedulerClosed
+from backend.bridge_server import OperationContext, OperationScheduler, SchedulerClosed
 
 
 def wait_for(event: threading.Event, message: str = "event did not fire") -> None:
@@ -60,6 +62,362 @@ class BridgeServerTest(unittest.TestCase):
 
         self.assertEqual(self.event_types("request-1"), ["accepted", "succeeded"])
         self.assertEqual(self.events_for("request-1")[0]["sequence"], 0)
+
+    def test_concurrent_cancel_cannot_overtake_acceptance(self) -> None:
+        scheduler = OperationScheduler(self.sink, max_workers=1)
+        acceptance_entered = threading.Event()
+        release_acceptance = threading.Event()
+        executor_release = threading.Event()
+        original = OperationContext._emit_accepted
+
+        def delayed_acceptance(context: OperationContext) -> None:
+            acceptance_entered.set()
+            wait_for(release_acceptance)
+            original(context)
+
+        submit_thread = threading.Thread(
+            target=lambda: scheduler.submit(
+                "cancel-race",
+                lambda context: executor_release.wait(1),
+            )
+        )
+        cancel_thread = threading.Thread(target=lambda: scheduler.cancel("cancel-race"))
+        try:
+            with patch.object(OperationContext, "_emit_accepted", delayed_acceptance):
+                submit_thread.start()
+                wait_for(acceptance_entered)
+                cancel_thread.start()
+                time.sleep(0.02)
+                release_acceptance.set()
+                submit_thread.join(1)
+                cancel_thread.join(1)
+            executor_release.set()
+            self.wait_for_terminal("cancel-race")
+        finally:
+            release_acceptance.set()
+            executor_release.set()
+            submit_thread.join(1)
+            cancel_thread.join(1)
+            scheduler.close()
+
+        self.assertEqual(self.event_types("cancel-race"), ["accepted", "cancelled"])
+
+    def test_reentrant_close_from_acceptance_sink_does_not_deadlock(self) -> None:
+        events: list[dict[str, Any]] = []
+        scheduler_holder: dict[str, OperationScheduler] = {}
+
+        def close_on_acceptance(event: dict[str, Any]) -> None:
+            events.append(event)
+            if event["type"] == "accepted":
+                scheduler_holder["scheduler"].close()
+
+        scheduler = OperationScheduler(close_on_acceptance, max_workers=1)
+        scheduler_holder["scheduler"] = scheduler
+        submit_thread = threading.Thread(
+            target=lambda: scheduler.submit("close-reentrant", lambda context: None),
+            daemon=True,
+        )
+
+        submit_thread.start()
+        submit_thread.join(1)
+
+        self.assertFalse(submit_thread.is_alive(), "re-entrant close deadlocked submit")
+        self.assertEqual(
+            [event["type"] for event in events],
+            ["accepted", "cancelled"],
+        )
+
+    def test_concurrent_close_waits_for_acceptance_and_cancellation(self) -> None:
+        scheduler = OperationScheduler(self.sink, max_workers=1)
+        acceptance_entered = threading.Event()
+        release_acceptance = threading.Event()
+        original = OperationContext._emit_accepted
+
+        def delayed_acceptance(context: OperationContext) -> None:
+            acceptance_entered.set()
+            wait_for(release_acceptance)
+            original(context)
+
+        submit_thread = threading.Thread(
+            target=lambda: scheduler.submit("close-race", lambda context: None)
+        )
+        close_thread = threading.Thread(target=scheduler.close)
+        try:
+            with patch.object(OperationContext, "_emit_accepted", delayed_acceptance):
+                submit_thread.start()
+                wait_for(acceptance_entered)
+                close_thread.start()
+                time.sleep(0.02)
+                self.assertTrue(close_thread.is_alive())
+                release_acceptance.set()
+                submit_thread.join(1)
+                close_thread.join(1)
+        finally:
+            release_acceptance.set()
+            submit_thread.join(1)
+            close_thread.join(1)
+            scheduler.close()
+
+        self.assertFalse(submit_thread.is_alive())
+        self.assertFalse(close_thread.is_alive())
+        self.assertEqual(self.event_types("close-race"), ["accepted", "cancelled"])
+
+    def test_reentrant_close_does_not_wait_on_another_acceptance(self) -> None:
+        scheduler_holder: dict[str, OperationScheduler] = {}
+        second_entered = threading.Event()
+        second_thread_holder: dict[str, threading.Thread] = {}
+        original = OperationContext._emit_accepted
+
+        def observe_second(context: OperationContext) -> None:
+            if context.request_id == "second-acceptance":
+                second_entered.set()
+            original(context)
+
+        def close_with_another_acceptance(event: dict[str, Any]) -> None:
+            self.sink(event)
+            if event["id"] != "first-acceptance" or event["type"] != "accepted":
+                return
+            second_thread = threading.Thread(
+                target=lambda: scheduler_holder["scheduler"].submit(
+                    "second-acceptance",
+                    lambda context: None,
+                ),
+                daemon=True,
+            )
+            second_thread_holder["thread"] = second_thread
+            second_thread.start()
+            wait_for(second_entered)
+            scheduler_holder["scheduler"].close()
+
+        scheduler = OperationScheduler(close_with_another_acceptance, max_workers=1)
+        scheduler_holder["scheduler"] = scheduler
+        first_thread = threading.Thread(
+            target=lambda: scheduler.submit("first-acceptance", lambda context: None),
+            daemon=True,
+        )
+
+        with patch.object(OperationContext, "_emit_accepted", observe_second):
+            first_thread.start()
+            first_thread.join(1)
+            second_thread = second_thread_holder.get("thread")
+            if second_thread is not None:
+                second_thread.join(1)
+
+        self.assertFalse(first_thread.is_alive(), "re-entrant close deadlocked the accepting thread")
+        self.assertIsNotNone(second_thread)
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(self.event_types("first-acceptance"), ["accepted", "cancelled"])
+        self.assertEqual(self.event_types("second-acceptance"), ["accepted", "cancelled"])
+
+    def test_reentrant_close_does_not_join_a_worker_waiting_on_the_sink(self) -> None:
+        scheduler_holder: dict[str, OperationScheduler] = {}
+        running_started = threading.Event()
+        release_running = threading.Event()
+
+        def close_from_trigger(event: dict[str, Any]) -> None:
+            self.sink(event)
+            if event["id"] == "close-trigger" and event["type"] == "accepted":
+                scheduler_holder["scheduler"].close()
+
+        def run_until_cancelled(context: OperationContext) -> None:
+            context.register_terminator(release_running.set)
+            running_started.set()
+            wait_for(release_running)
+            context.check_cancelled()
+
+        scheduler = OperationScheduler(close_from_trigger, max_workers=1)
+        scheduler_holder["scheduler"] = scheduler
+        scheduler.submit("running-during-close", run_until_cancelled)
+        wait_for(running_started)
+        trigger_thread = threading.Thread(
+            target=lambda: scheduler.submit("close-trigger", lambda context: None),
+            daemon=True,
+        )
+
+        try:
+            trigger_thread.start()
+            trigger_thread.join(1)
+            self.assertFalse(
+                trigger_thread.is_alive(),
+                "re-entrant close joined a worker blocked on the event sink",
+            )
+            self.wait_for_terminal("running-during-close")
+            self.wait_for_terminal("close-trigger")
+        finally:
+            release_running.set()
+
+        self.assertEqual(
+            self.event_types("running-during-close"),
+            ["accepted", "cancelled"],
+        )
+        self.assertEqual(self.event_types("close-trigger"), ["accepted", "cancelled"])
+
+    def test_close_finishes_a_claimed_queued_cancellation_before_return(self) -> None:
+        scheduler = OperationScheduler(self.sink, max_workers=1)
+        running_started = threading.Event()
+        release_running = threading.Event()
+        cancel_entered = threading.Event()
+        release_cancel = threading.Event()
+        original = OperationScheduler._cancel_unstarted
+
+        def run_lane_head(context: OperationContext) -> None:
+            context.register_terminator(release_running.set)
+            running_started.set()
+            wait_for(release_running)
+            context.check_cancelled()
+
+        def delay_cancel(
+            active_scheduler: OperationScheduler,
+            operation: Any,
+        ) -> bool:
+            if threading.current_thread().name == "queued-canceller":
+                cancel_entered.set()
+                wait_for(release_cancel)
+            return original(active_scheduler, operation)
+
+        scheduler.submit("lane-head", run_lane_head, key="library")
+        scheduler.submit("queued-cancel", lambda context: None, key="library")
+        wait_for(running_started)
+        cancel_thread = threading.Thread(
+            target=lambda: scheduler.cancel("queued-cancel"),
+            name="queued-canceller",
+        )
+        close_thread = threading.Thread(target=scheduler.close)
+
+        try:
+            with patch.object(OperationScheduler, "_cancel_unstarted", delay_cancel):
+                cancel_thread.start()
+                wait_for(cancel_entered)
+                close_thread.start()
+                close_thread.join(1)
+                self.assertFalse(close_thread.is_alive())
+                self.assertEqual(
+                    self.event_types("queued-cancel"),
+                    ["accepted", "cancelled"],
+                )
+        finally:
+            release_cancel.set()
+            release_running.set()
+            cancel_thread.join(1)
+            close_thread.join(1)
+
+        self.assertFalse(cancel_thread.is_alive())
+
+    def test_worker_cannot_remove_claimed_work_before_its_terminal_event(self) -> None:
+        scheduler = OperationScheduler(self.sink, max_workers=1)
+        head_started = threading.Event()
+        release_head = threading.Event()
+        cancel_entered = threading.Event()
+        release_cancel = threading.Event()
+        original = OperationScheduler._cancel_unstarted
+
+        def run_lane_head(context: OperationContext) -> None:
+            head_started.set()
+            wait_for(release_head)
+
+        def delay_cancel(
+            active_scheduler: OperationScheduler,
+            operation: Any,
+        ) -> bool:
+            if threading.current_thread().name == "removal-race-canceller":
+                cancel_entered.set()
+                wait_for(release_cancel)
+            return original(active_scheduler, operation)
+
+        scheduler.submit("removal-race-head", run_lane_head)
+        scheduler.submit("removal-race-queued", lambda context: None)
+        wait_for(head_started)
+        cancel_thread = threading.Thread(
+            target=lambda: scheduler.cancel("removal-race-queued"),
+            name="removal-race-canceller",
+        )
+        close_thread = threading.Thread(target=scheduler.close)
+
+        try:
+            with patch.object(OperationScheduler, "_cancel_unstarted", delay_cancel):
+                cancel_thread.start()
+                wait_for(cancel_entered)
+                release_head.set()
+                with scheduler._condition:
+                    removed = scheduler._condition.wait_for(
+                        lambda: "removal-race-queued" not in scheduler._operations,
+                        timeout=1,
+                    )
+                self.assertTrue(removed)
+                close_thread.start()
+                close_thread.join(1)
+                self.assertFalse(close_thread.is_alive())
+                self.assertEqual(
+                    self.event_types("removal-race-queued"),
+                    ["accepted", "cancelled"],
+                )
+        finally:
+            release_head.set()
+            release_cancel.set()
+            cancel_thread.join(1)
+            close_thread.join(1)
+
+        self.assertFalse(cancel_thread.is_alive())
+
+    def test_keyed_lane_cannot_drop_claimed_work_before_its_terminal_event(self) -> None:
+        scheduler = OperationScheduler(self.sink, max_workers=1)
+        head_started = threading.Event()
+        release_head = threading.Event()
+        cancel_entered = threading.Event()
+        release_cancel = threading.Event()
+        original = OperationScheduler._cancel_unstarted
+
+        def run_lane_head(context: OperationContext) -> None:
+            head_started.set()
+            wait_for(release_head)
+
+        def delay_cancel(
+            active_scheduler: OperationScheduler,
+            operation: Any,
+        ) -> bool:
+            if threading.current_thread().name == "keyed-removal-canceller":
+                cancel_entered.set()
+                wait_for(release_cancel)
+            return original(active_scheduler, operation)
+
+        scheduler.submit("keyed-removal-head", run_lane_head, key="library")
+        scheduler.submit(
+            "keyed-removal-queued",
+            lambda context: None,
+            key="library",
+        )
+        wait_for(head_started)
+        cancel_thread = threading.Thread(
+            target=lambda: scheduler.cancel("keyed-removal-queued"),
+            name="keyed-removal-canceller",
+        )
+        close_thread = threading.Thread(target=scheduler.close)
+
+        try:
+            with patch.object(OperationScheduler, "_cancel_unstarted", delay_cancel):
+                cancel_thread.start()
+                wait_for(cancel_entered)
+                release_head.set()
+                with scheduler._condition:
+                    removed = scheduler._condition.wait_for(
+                        lambda: "keyed-removal-queued" not in scheduler._operations,
+                        timeout=1,
+                    )
+                self.assertTrue(removed)
+                close_thread.start()
+                close_thread.join(1)
+                self.assertFalse(close_thread.is_alive())
+                self.assertEqual(
+                    self.event_types("keyed-removal-queued"),
+                    ["accepted", "cancelled"],
+                )
+        finally:
+            release_head.set()
+            release_cancel.set()
+            cancel_thread.join(1)
+            close_thread.join(1)
+
+        self.assertFalse(cancel_thread.is_alive())
 
     def test_unkeyed_operations_can_run_concurrently(self) -> None:
         scheduler = OperationScheduler(self.sink, max_workers=2)

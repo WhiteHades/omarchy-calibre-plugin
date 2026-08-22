@@ -267,6 +267,11 @@ class OperationContext:
 def _error_payload(error: Any) -> dict[str, Any]:
     if isinstance(error, Mapping):
         return dict(error)
+    serializer = getattr(error, "as_dict", None)
+    if callable(serializer):
+        payload = serializer()
+        if isinstance(payload, Mapping):
+            return dict(payload)
     if isinstance(error, BaseException):
         message = str(error)
     else:
@@ -279,6 +284,8 @@ class _Operation:
     context: OperationContext
     executor: Executor
     key: Hashable | None
+    accepting: bool = True
+    accepting_thread: int | None = None
     started: bool = False
     cancel_claimed: bool = False
     done: bool = False
@@ -309,6 +316,7 @@ class OperationScheduler:
         self._event_sink = event_sink or (lambda event: None)
         if not callable(self._event_sink):
             raise TypeError("event_sink must be callable")
+        self._sink_state = threading.local()
         self._sink_lock = threading.RLock()
         self._condition = threading.Condition(threading.RLock())
         self._ready: Deque[_Operation] = deque()
@@ -316,6 +324,7 @@ class OperationScheduler:
         self._operations: dict[str, _Operation] = {}
         self._known_request_ids: set[str] = set()
         self._closed = False
+        self._close_complete = threading.Event()
         self._workers = [
             threading.Thread(
                 target=self._worker,
@@ -326,6 +335,17 @@ class OperationScheduler:
         ]
         for worker in self._workers:
             worker.start()
+
+    def _deliver_event(self, event: Event) -> None:
+        depth = getattr(self._sink_state, "depth", 0)
+        self._sink_state.depth = depth + 1
+        try:
+            self._event_sink(event)
+        finally:
+            if depth:
+                self._sink_state.depth = depth
+            else:
+                del self._sink_state.depth
 
     def submit(
         self,
@@ -343,8 +363,13 @@ class OperationScheduler:
         if key is not None:
             hash(key)
 
-        context = OperationContext(request_id, self._event_sink, self._sink_lock)
-        operation = _Operation(context, executor, key)
+        context = OperationContext(request_id, self._deliver_event, self._sink_lock)
+        operation = _Operation(
+            context,
+            executor,
+            key,
+            accepting_thread=threading.get_ident(),
+        )
         with self._condition:
             if self._closed:
                 raise SchedulerClosed("operation scheduler is closed")
@@ -353,28 +378,47 @@ class OperationScheduler:
             self._known_request_ids.add(request_id)
             self._operations[request_id] = operation
 
-        # This call intentionally precedes the queue operation.  It also
-        # leaves a small but useful integration seam: a sink can observe an
-        # accepted request before any executor-side progress is possible.
-        context._emit_accepted()
+        # The operation is visible to cancellation before this callback, but
+        # remains in its accepting state. Cancellation records its claim and
+        # lets submit publish the terminal event after acceptance returns. The
+        # callback therefore runs without the scheduler registry lock.
+        try:
+            context._emit_accepted()
+        except BaseException:
+            with self._condition:
+                operation.accepting = False
+                operation.accepting_thread = None
+                operation.done = True
+                self._operations.pop(request_id, None)
+                self._condition.notify_all()
+            raise
 
         cancel_on_submit = False
         with self._condition:
             if self._closed or operation.cancel_claimed or context.terminal:
-                if not operation.cancel_claimed and not operation.done:
+                if context.terminal:
+                    operation.done = True
+                elif not operation.cancel_claimed:
                     operation.cancel_claimed = True
                     operation.done = True
-                    cancel_on_submit = True
-                if operation.done:
-                    # Cancellation can be re-entrant from the accepted-event
-                    # sink, before this operation has entered a queue.
+                cancel_on_submit = operation.cancel_claimed and not context.terminal
+                if operation.done and not cancel_on_submit:
+                    operation.accepting = False
+                    operation.accepting_thread = None
                     self._operations.pop(request_id, None)
             else:
+                operation.accepting = False
+                operation.accepting_thread = None
                 self._enqueue_locked(operation)
-                self._condition.notify()
+            self._condition.notify_all()
 
         if cancel_on_submit:
             self._cancel_unstarted(operation)
+            with self._condition:
+                operation.accepting = False
+                operation.accepting_thread = None
+                self._operations.pop(request_id, None)
+                self._condition.notify_all()
         return context
 
     def cancel(self, request_id: str) -> bool:
@@ -388,6 +432,10 @@ class OperationScheduler:
             operation = self._operations.get(request_id)
             if operation is None or operation.done:
                 return False
+            if operation.accepting:
+                operation.cancel_claimed = True
+                operation.done = True
+                return True
             if not operation.started:
                 if operation.cancel_claimed:
                     return False
@@ -398,7 +446,8 @@ class OperationScheduler:
                 queued = False
 
         if queued:
-            return self._cancel_unstarted(operation)
+            self._cancel_unstarted(operation)
+            return True
 
         cancellation = operation.context._request_cancel(queued=False)
         operation.context._invoke_terminators(cancellation.callbacks)
@@ -409,20 +458,40 @@ class OperationScheduler:
     def close(self) -> None:
         """Cancel pending work, reject submissions, and join worker threads."""
 
+        inside_event_sink = getattr(self._sink_state, "depth", 0) > 0
         queued: list[_Operation] = []
         running: list[_Operation] = []
+        accepting: list[_Operation] = []
         with self._condition:
+            if self._closed:
+                close_already_started = True
+            else:
+                close_already_started = False
             self._closed = True
-            for operation in tuple(self._operations.values()):
-                if operation.done:
-                    continue
-                if operation.started:
-                    running.append(operation)
-                else:
-                    operation.cancel_claimed = True
-                    operation.done = True
-                    queued.append(operation)
+            if not close_already_started:
+                for operation in tuple(self._operations.values()):
+                    if operation.accepting:
+                        if not operation.done:
+                            operation.cancel_claimed = True
+                            operation.done = True
+                        accepting.append(operation)
+                        continue
+                    if operation.done:
+                        if not operation.context.terminal:
+                            queued.append(operation)
+                        continue
+                    if operation.started:
+                        running.append(operation)
+                    else:
+                        operation.cancel_claimed = True
+                        operation.done = True
+                        queued.append(operation)
             self._condition.notify_all()
+
+        if close_already_started:
+            if not inside_event_sink:
+                self._close_complete.wait()
+            return
 
         for operation in queued:
             self._cancel_unstarted(operation)
@@ -432,10 +501,29 @@ class OperationScheduler:
 
         with self._condition:
             self._condition.notify_all()
-        current = threading.current_thread()
-        for worker in self._workers:
-            if worker is not current:
-                worker.join()
+
+        if inside_event_sink:
+            threading.Thread(
+                target=self._finish_close,
+                args=(tuple(accepting),),
+                name="bridge-close",
+                daemon=True,
+            ).start()
+        else:
+            self._finish_close(tuple(accepting))
+
+    def _finish_close(self, accepting: tuple[_Operation, ...]) -> None:
+        try:
+            current = threading.current_thread()
+            for worker in self._workers:
+                if worker is not current:
+                    worker.join()
+            with self._condition:
+                self._condition.wait_for(
+                    lambda: all(not operation.accepting for operation in accepting)
+                )
+        finally:
+            self._close_complete.set()
 
     def __enter__(self) -> "OperationScheduler":
         return self
@@ -462,6 +550,7 @@ class OperationScheduler:
 
     def _worker(self) -> None:
         while True:
+            cancel_unstarted = False
             with self._condition:
                 while not self._ready and not self._closed:
                     self._condition.wait()
@@ -469,9 +558,19 @@ class OperationScheduler:
                     return
                 operation = self._ready.popleft()
                 if operation.done or operation.cancel_claimed or operation.context.terminal:
+                    if operation.cancel_claimed and not operation.context.terminal:
+                        cancel_unstarted = True
+                    else:
+                        self._operation_done_locked(operation)
+                        continue
+                else:
+                    operation.started = True
+
+            if cancel_unstarted:
+                self._cancel_unstarted(operation)
+                with self._condition:
                     self._operation_done_locked(operation)
-                    continue
-                operation.started = True
+                continue
 
             context = operation.context
             try:
@@ -503,7 +602,7 @@ class OperationScheduler:
             return
         if lane and lane[0] is operation:
             lane.popleft()
-        while lane and lane[0].done:
+        while lane and lane[0].done and lane[0].context.terminal:
             stale = lane.popleft()
             self._operations.pop(stale.context.request_id, None)
         if lane:
