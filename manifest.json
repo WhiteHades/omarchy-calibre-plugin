@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.whitehades.calibre",
+  "name": "Calibre",
+  "version": "0.1.0",
+  "author": "WhiteHades",
+  "license": "MIT",
+  "description": "Manage a Calibre library from the Omarchy bar.",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Calibre",
+    "description": "Search, edit, convert, import, and export books without opening the Calibre desktop.",
+    "category": "Files",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "pageSize": 50
+    },
+    "schema": [
+      {
+        "key": "pageSize",
+        "type": "integer",
+        "label": "Books per page",
+        "min": 20,
+        "max": 200,
+        "step": 10,
+        "defaultValue": 50
+      }
+    ]
+  }
+}
