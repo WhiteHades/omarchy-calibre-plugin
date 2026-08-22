@@ -196,6 +196,16 @@ function preferredFormat(book, preferences) {
   return order.length > 0 ? order[0] : ""
 }
 
+function parseFormatPreference(value) {
+  var source = Array.isArray(value) ? value : String(value || "").split(",")
+  var formats = []
+  for (var i = 0; i < source.length; i++) {
+    var format = String(source[i] || "").trim().toUpperCase()
+    if (/^[A-Z0-9]{1,32}$/.test(format) && formats.indexOf(format) === -1) formats.push(format)
+  }
+  return formats.length > 0 ? formats : ["EPUB", "AZW3", "PDF", "MOBI"]
+}
+
 function formatPublished(value) {
   var text = String(value || "")
   var match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text)
@@ -342,6 +352,7 @@ if (typeof module !== "undefined") {
     applyQuery: applyQuery,
     applyBook: applyBook,
     preferredFormat: preferredFormat,
+    parseFormatPreference: parseFormatPreference,
     formatPublished: formatPublished,
     formatBytes: formatBytes,
     combineSearch: combineSearch,

@@ -21,6 +21,7 @@ class PluginContractTest(unittest.TestCase):
         self.assertEqual(manifest["entryPoints"], {"barWidget": "BarWidget.qml"})
         self.assertEqual(manifest["barWidget"]["allowMultiple"], False)
         self.assertEqual(manifest["barWidget"]["defaultSection"], "right")
+        self.assertEqual(manifest["barWidget"]["defaults"]["preferredFormats"], "EPUB,AZW3,PDF,MOBI")
         self.assertTrue((ROOT / manifest["entryPoints"]["barWidget"]).is_file())
 
     def test_widget_uses_the_native_panel_contract(self) -> None:

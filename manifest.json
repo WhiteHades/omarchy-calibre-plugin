@@ -19,7 +19,8 @@
     "allowMultiple": false,
     "defaultSection": "right",
     "defaults": {
-      "pageSize": 50
+      "pageSize": 50,
+      "preferredFormats": "EPUB,AZW3,PDF,MOBI"
     },
     "schema": [
       {
@@ -30,6 +31,13 @@
         "max": 200,
         "step": 10,
         "defaultValue": 50
+      },
+      {
+        "key": "preferredFormats",
+        "type": "string",
+        "label": "Preferred open formats",
+        "description": "Comma-separated format order used by Open book.",
+        "defaultValue": "EPUB,AZW3,PDF,MOBI"
       }
     ]
   }

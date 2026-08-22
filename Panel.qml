@@ -399,8 +399,8 @@ Panel {
   }
 
   function preferredFormat(book) {
-    var preferences = setting("preferredFormats", ["EPUB", "AZW3", "PDF", "MOBI"])
-    var wanted = Model.preferredFormat(book, preferences instanceof Array ? preferences : [])
+    var preferences = Model.parseFormatPreference(setting("preferredFormats", "EPUB,AZW3,PDF,MOBI"))
+    var wanted = Model.preferredFormat(book, preferences)
     var formats = book && book.formats instanceof Array ? book.formats : []
     for (var i = 0; i < formats.length; i++) {
       if (String(formats[i].name || "").toUpperCase() === wanted) return formats[i]
