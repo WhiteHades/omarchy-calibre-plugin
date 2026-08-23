@@ -162,10 +162,9 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("height: implicitHeight", panel)
         self.assertRegex(panel, r'PanelSectionHeader\s*\{\s*text: "CATALOGUE"')
         self.assertIn("Math.floor(libraryPanes.availableWidth * 0.47)", panel)
-        self.assertIn("bookScroll.contentHeight > bookScroll.height", panel)
-        self.assertIn("bookScrollBar.width", panel)
-        self.assertIn("inspectorScroll.contentHeight > inspectorScroll.height", panel)
-        self.assertIn("inspectorScrollBar.width", panel)
+        self.assertEqual(panel.count("policy: QQC.ScrollBar.AlwaysOff"), 2)
+        self.assertIn("width: bookScroll.width", panel)
+        self.assertIn("width: inspectorScroll.width", panel)
 
     def test_job_cancellation_stays_inside_the_bridge_protocol(self) -> None:
         bridge = (ROOT / "CalibreBridge.qml").read_text()
@@ -271,12 +270,25 @@ class PluginContractTest(unittest.TestCase):
         self.assertRegex(panel, r"function\s+restorePanelFocus\s*\(")
         self.assertRegex(panel, r"MouseArea\s*\{\s*id:\s*modalInputShield")
 
-    def test_dropdown_trigger_is_inside_the_popup_close_boundary(self) -> None:
+    def test_dropdown_popup_tracks_its_trigger_in_the_panel_window(self) -> None:
         dropdown = (ROOT / "CalibreDropdown.qml").read_text()
 
-        self.assertRegex(dropdown, r"Popup\s*\{\s*id:\s*popup\s*closePolicy:[^\n]*CloseOnPressOutside\s*x:\s*0\s*y:\s*0")
+        self.assertIn("popupType: Popup.Item", dropdown)
+        self.assertIn("parent: trigger.Window.window ? trigger.Window.window.contentItem : trigger", dropdown)
+        self.assertIn("trigger.mapToItem(parent, 0, 0)", dropdown)
+        self.assertIn("x: _anchorX", dropdown)
+        self.assertIn("y: _anchorY", dropdown)
         self.assertRegex(dropdown, r"MouseArea\s*\{\s*id:\s*popupTrigger")
         self.assertIn("height: trigger.height", dropdown)
+        self.assertRegex(dropdown, r"onClosed:\s*trigger\.forceActiveFocus\(\)")
+
+    def test_panel_escape_shortcut_lives_in_the_visible_surface(self) -> None:
+        panel = (ROOT / "Panel.qml").read_text()
+        key_catcher = panel[panel.index("PanelKeyCatcher {") : panel.index("Item {", panel.index("PanelKeyCatcher {"))]
+
+        self.assertIn('sequence: "Escape"', key_catcher)
+        self.assertIn('enabled: root.opened && root.dialogMode === ""', key_catcher)
+        self.assertNotIn("popupOpen", key_catcher[key_catcher.index('sequence: "Escape"') :])
 
     def test_panel_supports_the_documented_delete_key(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()

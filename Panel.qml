@@ -1387,14 +1387,6 @@ Panel {
   }
 
   Shortcut {
-    sequence: "Escape"
-    context: Qt.WindowShortcut
-    enabled: root.opened && root.dialogMode === "" && !searchField.activeFocus
-      && !libraryDropdown.popupOpen && !sortDropdown.popupOpen && !filterDropdown.popupOpen
-    onActivated: root.close()
-  }
-
-  Shortcut {
     sequence: "Delete"
     context: Qt.WindowShortcut
     enabled: root.opened && !keyCatcher.blocked
@@ -1534,6 +1526,14 @@ Panel {
       blocked: root.viewState.mode !== "library" || root.dialogMode !== "" || searchField.activeFocus
         || libraryDropdown.popupOpen || sortDropdown.popupOpen || filterDropdown.popupOpen
         || !keyCatcher.activeFocus
+
+      Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        enabled: root.opened && root.dialogMode === ""
+        onActivated: root.close()
+      }
+
       onMoveRequested: function(dx, dy) { root.moveCursor(dx, dy) }
       onActivateRequested: root.activateCursor()
       onCloseRequested: root.close()
@@ -1665,6 +1665,7 @@ Panel {
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onChanged: function(value) { root.switchLibrary(value) }
+                onPopupOpenChanged: if (!popupOpen) root.restorePanelFocus()
               }
 
               Text {
@@ -1695,6 +1696,7 @@ Panel {
               value: root.sortField
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onPopupOpenChanged: if (!popupOpen) root.restorePanelFocus()
               onChanged: function(value) {
                 root.sortField = value
                 root.search()
@@ -1747,6 +1749,7 @@ Panel {
               value: root.filterQuery
               foreground: root.foreground
               fontFamily: root.fontFamily
+              onPopupOpenChanged: if (!popupOpen) root.restorePanelFocus()
               onChanged: function(value) {
                 root.filterQuery = value
                 root.search()
@@ -1843,14 +1846,12 @@ Panel {
                 interactive: contentHeight > height
 
                 QQC.ScrollBar.vertical: QQC.ScrollBar {
-                  id: bookScrollBar
-                  policy: QQC.ScrollBar.AsNeeded
+                  policy: QQC.ScrollBar.AlwaysOff
                 }
 
                 Column {
                   id: bookColumn
-                  width: Math.max(0, bookScroll.width - (bookScroll.contentHeight > bookScroll.height
-                    ? bookScrollBar.width + Style.space(3) : 0))
+                  width: bookScroll.width
                   spacing: Style.space(2)
 
                   Repeater {
@@ -1957,15 +1958,12 @@ Panel {
               flickableDirection: Flickable.VerticalFlick
 
               QQC.ScrollBar.vertical: QQC.ScrollBar {
-                id: inspectorScrollBar
-                policy: QQC.ScrollBar.AsNeeded
+                policy: QQC.ScrollBar.AlwaysOff
               }
 
               Column {
                 id: inspector
-                width: Math.max(0, inspectorScroll.width
-                  - (inspectorScroll.contentHeight > inspectorScroll.height
-                    ? inspectorScrollBar.width + Style.space(3) : 0))
+                width: inspectorScroll.width
                 spacing: Style.space(12)
 
                 PanelHero {

@@ -4,9 +4,9 @@ import qs.Commons
 import qs.Ui
 
 // Themed single-select dropdown. Trigger row paints with the kit's focus
-// chrome; the popup anchors below and uses Color.popups.background +
-// Color.popups.border so it reads as a panel surface rather than the
-// platform-native ComboBox look.
+// chrome; the menu paints below the trigger and uses
+// Color.popups.background + Color.popups.border so it reads as a panel
+// surface rather than the platform-native ComboBox look.
 //
 // `options` accepts either a plain string[] or an array of
 // { value, label } objects (label is what we render; value is what we
@@ -46,9 +46,12 @@ Item {
   // own keyCatcher so j/k inside the popup don't double-drive the panel
   // cursor.
   readonly property bool popupOpen: popup.opened
-  function open() { popup.open() }
+  function open() {
+    popup.reposition()
+    popup.open()
+  }
   function close() { popup.close() }
-  function toggle() { popup.opened ? popup.close() : popup.open() }
+  function toggle() { popup.opened ? popup.close() : root.open() }
 
   signal changed(string value)
   signal hovered(bool isHovered)
@@ -111,7 +114,7 @@ Item {
       Keys.onPressed: function(event) {
         if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter
             || event.key === Qt.Key_Space || event.key === Qt.Key_Down) {
-          popup.opened ? popup.close() : popup.open()
+          root.toggle()
           event.accepted = true
         } else if (event.key === Qt.Key_Escape && popup.opened) {
           popup.close(); event.accepted = true
@@ -149,15 +152,27 @@ Item {
         cursorShape: Qt.PointingHandCursor
         onClicked: {
           trigger.forceActiveFocus()
-          popup.opened ? popup.close() : popup.open()
+          root.toggle()
         }
       }
 
       Popup {
         id: popup
+        popupType: Popup.Item
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
-        x: 0
-        y: 0
+        parent: trigger.Window.window ? trigger.Window.window.contentItem : trigger
+        property real _anchorX: 0
+        property real _anchorY: 0
+
+        function reposition() {
+          if (!parent) return
+          var point = trigger.mapToItem(parent, 0, 0)
+          _anchorX = point.x
+          _anchorY = point.y
+        }
+
+        x: _anchorX
+        y: _anchorY
         width: trigger.width
         readonly property real menuHeight: Math.min(root.options.length * root.popupRowHeight + Math.max(0, root.options.length - 1) * Style.spacing.labelGap + Style.spacing.xxs,
                                                     root.popupRowHeight * 8 + 7 * Style.spacing.labelGap + Style.spacing.xxs)
@@ -168,6 +183,14 @@ Item {
         topPadding: trigger.height + Style.spacing.xxs + Border.top(root.popupBorderSpec) + Style.spacing.hairline
         bottomPadding: Border.bottom(root.popupBorderSpec) + Style.spacing.hairline
         focus: true
+
+        Connections {
+          target: trigger
+          function onXChanged() { popup.reposition() }
+          function onYChanged() { popup.reposition() }
+          function onWidthChanged() { popup.reposition() }
+          function onHeightChanged() { popup.reposition() }
+        }
 
         background: Item {
           MouseArea {
@@ -192,9 +215,11 @@ Item {
         }
 
         onOpened: {
+          reposition()
           optionList.currentIndex = Math.max(0, optionList.indexOfValue(root.value))
           optionList.forceActiveFocus()
         }
+        onClosed: trigger.forceActiveFocus()
 
         contentItem: ListView {
           id: optionList
