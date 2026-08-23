@@ -316,7 +316,7 @@ class CalibreBridge:
         libraries = []
         for candidate in remembered:
             library = self.register_library(candidate)
-            if library is not None:
+            if library is not None and all(item["token"] != library["token"] for item in libraries):
                 libraries.append(library)
         if not libraries:
             for candidate in self.discover_libraries():

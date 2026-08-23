@@ -265,6 +265,11 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("!keyCatcher.activeFocus", panel)
         self.assertIn("searchField.forceActiveFocus()", panel)
 
+    def test_dropdown_trigger_is_inside_the_popup_close_boundary(self) -> None:
+        dropdown = (ROOT / "CalibreDropdown.qml").read_text()
+
+        self.assertIn("Popup.CloseOnPressOutsideParent", dropdown)
+
     def test_panel_supports_the_documented_delete_key(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
 

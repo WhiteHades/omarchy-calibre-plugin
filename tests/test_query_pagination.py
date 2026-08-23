@@ -89,9 +89,9 @@ class QueryPaginationTest(unittest.TestCase):
                 return {"actions": []}
 
         bridge = BootstrapFixtureBridge()
-        bridge.bootstrap(
+        result = bridge.bootstrap(
             {
-                "rememberedLibraries": ["library"],
+                "rememberedLibraries": ["library", "library-alias"],
                 "pageSize": 40,
                 "search": "formats:=EPUB",
                 "sort": "rating",
@@ -99,6 +99,7 @@ class QueryPaginationTest(unittest.TestCase):
             }
         )
 
+        self.assertEqual(len(result["libraries"]), 1)
         self.assertEqual(
             bridge.query_input,
             {
