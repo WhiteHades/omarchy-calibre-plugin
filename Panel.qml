@@ -60,6 +60,9 @@ Panel {
   property var coverPickerContext: null
   property var exportPickerContext: null
   property var formatPickerContext: null
+  property var queuedFilePicker: null
+  property var activeFilePicker: null
+  property bool reopenAfterFilePicker: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color urgent: bar ? bar.urgent : Color.urgent
@@ -87,12 +90,14 @@ Panel {
   ]
 
   function open() {
+    if (queuedFilePicker || activeFilePicker) return
     openedFromHotkey = false
     setCenterHoverRevealSuppressed(false)
     root.controller.show()
   }
 
   function openFromHotkey() {
+    if (queuedFilePicker || activeFilePicker) return
     openedFromHotkey = true
     root.controller.show()
     Qt.callLater(function() {
@@ -101,6 +106,9 @@ Panel {
   }
 
   function close() {
+    filePickerDelay.stop()
+    queuedFilePicker = null
+    reopenAfterFilePicker = false
     dismissWorkflow()
     setCenterHoverRevealSuppressed(false)
     root.controller.hide()
@@ -143,6 +151,34 @@ Panel {
   function setCenterHoverRevealSuppressed(value) {
     if (bar && "centerHoverRevealSuppressed" in bar)
       bar.centerHoverRevealSuppressed = value
+  }
+
+  function restorePanelFocus() {
+    Qt.callLater(function() {
+      if (!root.opened) return
+      if (root.dialogMode === "metadata") metadataEditor.forceActiveFocus()
+      else if (root.dialogMode === "formats") formatManager.forceActiveFocus()
+      else if (root.dialogMode === "") keyCatcher.forceActiveFocus()
+    })
+  }
+
+  function launchFilePicker(picker) {
+    if (!picker || picker.running || queuedFilePicker || activeFilePicker) return
+    queuedFilePicker = picker
+    reopenAfterFilePicker = opened
+    if (opened) {
+      setCenterHoverRevealSuppressed(false)
+      root.controller.hide()
+    }
+    filePickerDelay.restart()
+  }
+
+  function finishFilePicker(picker) {
+    if (activeFilePicker !== picker) return
+    activeFilePicker = null
+    if (!reopenAfterFilePicker) return
+    reopenAfterFilePicker = false
+    root.controller.show()
   }
 
   function rememberRequest(id, kind, context) {
@@ -719,7 +755,7 @@ Panel {
     } else if (actionId === "open.calibre.download") {
       Qt.openUrlExternally("https://calibre-ebook.com/download_linux")
     } else if (actionId === "choose.library") {
-      if (!chooseLibrary.running) chooseLibrary.running = true
+      launchFilePicker(chooseLibrary)
     } else if (actionId === "retry") {
       bootstrap("")
     }
@@ -856,9 +892,9 @@ Panel {
       searchField.forceActiveFocus()
       searchField.selectAll()
     })
-    else if (commandId === "add-files" && !addBooks.running) addBooks.running = true
-    else if (commandId === "add-folder" && !addFolder.running) addFolder.running = true
-    else if (commandId === "choose-library" && !chooseLibrary.running) chooseLibrary.running = true
+    else if (commandId === "add-files") launchFilePicker(addBooks)
+    else if (commandId === "add-folder") launchFilePicker(addFolder)
+    else if (commandId === "choose-library") launchFilePicker(chooseLibrary)
     else if (commandId === "refresh") refresh()
     else if (commandId === "jobs") dialogMode = "jobs"
     else if (commandId === "help") dialogMode = "help"
@@ -1241,7 +1277,7 @@ Panel {
       libraryToken: viewState.currentLibrary,
       bookId: selectedBook.id
     }
-    coverFile.running = true
+    launchFilePicker(coverFile)
   }
 
   function openExportPicker() {
@@ -1250,7 +1286,7 @@ Panel {
       libraryToken: viewState.currentLibrary,
       bookId: selectedBook.id
     }
-    exportFolder.running = true
+    launchFilePicker(exportFolder)
   }
 
   function openFormatPicker() {
@@ -1260,7 +1296,7 @@ Panel {
       bookId: selectedBook.id,
       book: selectedBook
     }
-    formatFile.running = true
+    launchFilePicker(formatFile)
   }
 
   function scrollSelectedIntoView() {
@@ -1315,8 +1351,9 @@ Panel {
   onOpenedChanged: if (opened) {
     cursorActive = false
     if (!bootstrapped) bootstrap("")
-    Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+    restorePanelFocus()
   }
+  onDialogModeChanged: if (dialogMode === "") restorePanelFocus()
 
   CalibreBridge {
     id: bridge
@@ -1331,6 +1368,22 @@ Panel {
     interval: 220
     repeat: false
     onTriggered: root.search()
+  }
+
+  Timer {
+    id: filePickerDelay
+    interval: 160
+    repeat: false
+    onTriggered: {
+      var picker = root.queuedFilePicker
+      root.queuedFilePicker = null
+      if (!picker) {
+        root.reopenAfterFilePicker = false
+        return
+      }
+      root.activeFilePicker = picker
+      picker.running = true
+    }
   }
 
   Shortcut {
@@ -1352,6 +1405,7 @@ Panel {
     id: chooseLibrary
     running: false
     command: ["omarchy-file-select", "--title", "Choose Calibre library", "--directory"]
+    onExited: root.finishFilePicker(chooseLibrary)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1370,6 +1424,7 @@ Panel {
       "--multiple",
       "--extensions", "epub pdf azw3 mobi docx txt rtf cbz cbr fb2 html htm odt lit prc"
     ]
+    onExited: root.finishFilePicker(addBooks)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.addBookPaths(text, false)
@@ -1380,6 +1435,7 @@ Panel {
     id: addFolder
     running: false
     command: ["omarchy-file-select", "--title", "Add a folder to Calibre", "--directory"]
+    onExited: root.finishFilePicker(addFolder)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: root.addBookPaths(text, true)
@@ -1394,6 +1450,7 @@ Panel {
       "--title", "Choose a book cover",
       "--extensions", "jpg jpeg png webp gif avif"
     ]
+    onExited: root.finishFilePicker(coverFile)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1417,6 +1474,7 @@ Panel {
     id: exportFolder
     running: false
     command: ["omarchy-file-select", "--title", "Export book", "--directory"]
+    onExited: root.finishFilePicker(exportFolder)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1448,6 +1506,7 @@ Panel {
       "--title", "Add or replace a book format",
       "--extensions", "epub azw3 mobi pdf docx odt rtf txt html htm htmlz fb2 lit prc cbz cbr kepub"
     ]
+    onExited: root.finishFilePicker(formatFile)
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1464,7 +1523,8 @@ Panel {
     bar: root.bar
     open: root.opened
     centerOnBar: true
-    focusTarget: keyCatcher
+    focusTarget: root.dialogMode === "metadata" ? metadataEditor
+      : (root.dialogMode === "formats" ? formatManager : keyCatcher)
     contentWidth: panel.fittedContentWidth(Style.space(900))
     contentHeight: panel.fittedContentHeight(Style.space(610), Style.space(610))
 
@@ -1698,7 +1758,7 @@ Panel {
               tooltipText: "Add another Calibre library"
               foreground: root.foreground
               fontFamily: root.fontFamily
-              onClicked: if (!chooseLibrary.running) chooseLibrary.running = true
+              onClicked: root.launchFilePicker(chooseLibrary)
             }
 
             CalibreButton {
@@ -1718,8 +1778,8 @@ Panel {
               foreground: root.foreground
               fontFamily: root.fontFamily
               tooltipText: "Right-click to add a folder"
-              onClicked: if (!addBooks.running) addBooks.running = true
-              onRightClicked: if (!addFolder.running) addFolder.running = true
+              onClicked: root.launchFilePicker(addBooks)
+              onRightClicked: root.launchFilePicker(addFolder)
             }
           }
 
@@ -1782,11 +1842,15 @@ Panel {
                 flickableDirection: Flickable.VerticalFlick
                 interactive: contentHeight > height
 
-                QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
+                QQC.ScrollBar.vertical: QQC.ScrollBar {
+                  id: bookScrollBar
+                  policy: QQC.ScrollBar.AsNeeded
+                }
 
                 Column {
                   id: bookColumn
-                  width: bookScroll.width
+                  width: Math.max(0, bookScroll.width - (bookScroll.contentHeight > bookScroll.height
+                    ? bookScrollBar.width + Style.space(3) : 0))
                   spacing: Style.space(2)
 
                   Repeater {
@@ -1880,6 +1944,7 @@ Panel {
             }
 
             Flickable {
+              id: inspectorScroll
               width: libraryPanes.stacked ? libraryPanes.width
                 : Math.max(0, libraryPanes.availableWidth - cataloguePane.width)
               height: libraryPanes.stacked
@@ -1891,11 +1956,16 @@ Panel {
               boundsBehavior: Flickable.StopAtBounds
               flickableDirection: Flickable.VerticalFlick
 
-              QQC.ScrollBar.vertical: QQC.ScrollBar { policy: QQC.ScrollBar.AsNeeded }
+              QQC.ScrollBar.vertical: QQC.ScrollBar {
+                id: inspectorScrollBar
+                policy: QQC.ScrollBar.AsNeeded
+              }
 
               Column {
                 id: inspector
-                width: parent.width
+                width: Math.max(0, inspectorScroll.width
+                  - (inspectorScroll.contentHeight > inspectorScroll.height
+                    ? inspectorScrollBar.width + Style.space(3) : 0))
                 spacing: Style.space(12)
 
                 PanelHero {
@@ -2091,6 +2161,16 @@ Panel {
           }
         }
 
+        MouseArea {
+          id: modalInputShield
+          visible: root.dialogMode !== ""
+          anchors.fill: parent
+          z: 9
+          acceptedButtons: Qt.AllButtons
+          hoverEnabled: true
+          onWheel: function(wheel) { wheel.accepted = true }
+        }
+
         MetadataEditor {
           id: metadataEditor
           visible: root.dialogMode === "metadata"
@@ -2127,6 +2207,7 @@ Panel {
         }
 
         FormatManager {
+          id: formatManager
           visible: root.dialogMode === "formats"
           anchors.fill: parent
           z: 10

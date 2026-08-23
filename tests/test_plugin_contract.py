@@ -162,6 +162,10 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("height: implicitHeight", panel)
         self.assertRegex(panel, r'PanelSectionHeader\s*\{\s*text: "CATALOGUE"')
         self.assertIn("Math.floor(libraryPanes.availableWidth * 0.47)", panel)
+        self.assertIn("bookScroll.contentHeight > bookScroll.height", panel)
+        self.assertIn("bookScrollBar.width", panel)
+        self.assertIn("inspectorScroll.contentHeight > inspectorScroll.height", panel)
+        self.assertIn("inspectorScrollBar.width", panel)
 
     def test_job_cancellation_stays_inside_the_bridge_protocol(self) -> None:
         bridge = (ROOT / "CalibreBridge.qml").read_text()
@@ -264,6 +268,8 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn('root.viewState.mode !== "library"', panel)
         self.assertIn("!keyCatcher.activeFocus", panel)
         self.assertIn("searchField.forceActiveFocus()", panel)
+        self.assertRegex(panel, r"function\s+restorePanelFocus\s*\(")
+        self.assertRegex(panel, r"MouseArea\s*\{\s*id:\s*modalInputShield")
 
     def test_dropdown_trigger_is_inside_the_popup_close_boundary(self) -> None:
         dropdown = (ROOT / "CalibreDropdown.qml").read_text()
@@ -299,6 +305,14 @@ class PluginContractTest(unittest.TestCase):
         self.assertRegex(panel, r"function\s+submitForLibrary\s*\(")
         self.assertIn("bookId: root.coverPickerContext.bookId", panel)
         self.assertIn("bookIds: [root.exportPickerContext.bookId]", panel)
+        self.assertRegex(panel, r"function\s+launchFilePicker\s*\(")
+        self.assertIn("filePickerDelay.restart()", panel)
+        self.assertIn("root.controller.hide()", panel)
+        self.assertIn("onExited: root.finishFilePicker", panel)
+        self.assertGreaterEqual(panel.count("if (queuedFilePicker || activeFilePicker) return"), 2)
+        close_body = panel[panel.index("function close()") : panel.index("function dismissWorkflow()")]
+        self.assertIn("filePickerDelay.stop()", close_body)
+        self.assertIn("reopenAfterFilePicker = false", close_body)
 
     def test_bootstrap_preserves_the_visible_search_and_sort(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
