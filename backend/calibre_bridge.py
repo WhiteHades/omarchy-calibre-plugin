@@ -123,6 +123,7 @@ class CalibreBridge:
         self.libraries: dict[str, Path] = {}
         self.confirmations: dict[str, dict[str, Any]] = {}
         self._conversion_capabilities: dict[str, Any] | None = None
+        self._content_server_targets: dict[Path, str] = {}
         self._state_lock = threading.RLock()
         self._operation_local = threading.local()
         self.device_adapter = device_adapter if device_adapter is not None else DeviceAdapter(
@@ -2578,6 +2579,10 @@ class CalibreBridge:
             }
             if any(book_id not in rows_by_id for book_id in page_ids):
                 raise BridgeError("tool_failed", "Calibre returned an incomplete book page")
+            with self._state_lock:
+                uses_content_server = library in self._content_server_targets
+            if uses_content_server:
+                self.attach_local_book_assets(library, rows_by_id)
             items = [self.normalize_book(rows_by_id[book_id]) for book_id in page_ids]
         else:
             items = []
@@ -2585,6 +2590,63 @@ class CalibreBridge:
         next_offset = offset + len(page_ids)
         next_cursor = str(next_offset) if next_offset < len(book_ids) else None
         return {"items": items, "total": len(book_ids), "nextCursor": next_cursor}
+
+    def attach_local_book_assets(
+        self,
+        library: Path,
+        rows_by_id: dict[int, dict[str, Any]],
+    ) -> None:
+        executable = shutil.which("calibre-debug")
+        if executable is None:
+            raise BridgeError("capability_unavailable", "Calibre cannot resolve local book files")
+        code = """
+import json
+import sys
+from pathlib import Path
+from calibre.db.legacy import LibraryDatabase
+
+root = Path(sys.argv[1])
+database = LibraryDatabase(root, read_only=True)
+result = {}
+try:
+    for raw_id in sys.argv[2:]:
+        book_id = int(raw_id)
+        relative = database.new_api.get_book_path(book_id)
+        book_path = root / relative if relative else None
+        paths = [
+            str(path)
+            for name, filename in database.new_api.format_files(book_id).items()
+            if book_path and (path := book_path / f"{filename}.{name.lower()}").is_file()
+        ]
+        cover = book_path / "cover.jpg" if book_path else None
+        result[str(book_id)] = {
+            "formats": paths,
+            "cover": str(cover) if cover and cover.is_file() else "",
+        }
+finally:
+    database.close()
+print(json.dumps(result, separators=(",", ":")))
+""".strip()
+        completed = self.run(
+            [executable, "-c", code, str(library), *(str(book_id) for book_id in rows_by_id)],
+            timeout=30,
+        )
+        try:
+            assets = json.loads(completed.stdout)
+            if not isinstance(assets, dict):
+                raise TypeError
+            for book_id, row in rows_by_id.items():
+                asset = assets.get(str(book_id))
+                formats = asset.get("formats") if isinstance(asset, dict) else None
+                cover = asset.get("cover") if isinstance(asset, dict) else None
+                if not isinstance(formats, list) or not all(isinstance(path, str) for path in formats):
+                    raise TypeError
+                if not isinstance(cover, str):
+                    raise TypeError
+                row["formats"] = formats
+                row["cover"] = cover
+        except (json.JSONDecodeError, KeyError, TypeError) as error:
+            raise BridgeError("tool_failed", "Calibre returned invalid local book files") from error
 
     @staticmethod
     def normalize_book(row: Any) -> dict[str, Any]:
@@ -2664,15 +2726,56 @@ class CalibreBridge:
         if active_context is not None:
             active_context.check_cancelled()
         lock_file = self.acquire_calibredb_lock(active_context) if Path(command[0]).name == "calibredb" else None
+        library = self.calibredb_library_path(command)
+        with self._state_lock:
+            cached_target = self._content_server_targets.get(library) if library is not None else None
         try:
-            return self.run_command(
-                command,
-                timeout=timeout,
-                active_context=active_context,
-                cwd=cwd,
-                commit=commit,
-                check=check,
-            )
+            if cached_target is not None:
+                try:
+                    return self.run_command(
+                        self.replace_calibredb_library(command, cached_target),
+                        timeout=timeout,
+                        active_context=active_context,
+                        cwd=cwd,
+                        commit=commit,
+                        check=check,
+                    )
+                except BridgeError as error:
+                    if error.code not in {"calibre_busy", "timeout", "tool_failed"}:
+                        raise
+                    with self._state_lock:
+                        if self._content_server_targets.get(library) == cached_target:
+                            self._content_server_targets.pop(library, None)
+                    if commit:
+                        raise
+            try:
+                return self.run_command(
+                    command,
+                    timeout=timeout,
+                    active_context=active_context,
+                    cwd=cwd,
+                    commit=commit,
+                    check=check,
+                )
+            except BridgeError as error:
+                if error.code != "calibre_busy" or not check:
+                    raise
+                fallback = self.content_server_command(command, active_context, cwd)
+                if fallback is None:
+                    raise
+                completed = self.run_command(
+                    fallback,
+                    timeout=timeout,
+                    active_context=active_context,
+                    cwd=cwd,
+                    commit=commit,
+                    check=check,
+                )
+                target = self.calibredb_library_argument(fallback)
+                if library is not None and target is not None:
+                    with self._state_lock:
+                        self._content_server_targets[library] = target
+                return completed
         finally:
             if lock_file is not None:
                 try:
@@ -2681,6 +2784,141 @@ class CalibreBridge:
                     fcntl.flock(lock_file, fcntl.LOCK_UN)
                 finally:
                     os.close(lock_file)
+
+    def content_server_command(
+        self,
+        command: list[str],
+        context: OperationContext | None,
+        cwd: Path | None,
+    ) -> list[str] | None:
+        library = self.calibredb_library_path(command)
+        if library is None:
+            return None
+        executable = command[0]
+        for server in self.local_content_servers(library):
+            try:
+                completed = self.run_command(
+                    [executable, "list", "--with-library", f"{server}/#-"],
+                    timeout=10,
+                    active_context=context,
+                    cwd=cwd,
+                    commit=False,
+                    check=True,
+                )
+            except BridgeError:
+                continue
+            library_id = self.match_content_server_library(library, completed.stdout)
+            if library_id is None:
+                continue
+            return self.replace_calibredb_library(command, f"{server}/#{library_id}")
+        return None
+
+    @staticmethod
+    def calibredb_library_argument(command: list[str]) -> str | None:
+        for index, argument in enumerate(command):
+            if argument == "--with-library" and index + 1 < len(command):
+                return command[index + 1]
+            elif argument.startswith("--with-library="):
+                return argument.split("=", 1)[1]
+        return None
+
+    @classmethod
+    def calibredb_library_path(cls, command: list[str]) -> Path | None:
+        value = cls.calibredb_library_argument(command)
+        if value is None or value.startswith(("http://", "https://")):
+            return None
+        try:
+            return Path(value).expanduser().resolve()
+        except (OSError, RuntimeError):
+            return None
+
+    @staticmethod
+    def replace_calibredb_library(command: list[str], target: str) -> list[str]:
+        result = command.copy()
+        for index, argument in enumerate(result):
+            if argument == "--with-library" and index + 1 < len(result):
+                result[index + 1] = target
+                return result
+            if argument.startswith("--with-library="):
+                result[index] = f"--with-library={target}"
+                return result
+        return result
+
+    @classmethod
+    def local_content_servers(cls, library: Path) -> list[str]:
+        servers: list[str] = []
+        try:
+            processes = Path("/proc").iterdir()
+        except OSError:
+            return servers
+        for process in processes:
+            if not process.name.isdigit():
+                continue
+            try:
+                if process.stat().st_uid != os.getuid() or (process / "exe").resolve().name != "calibre-server":
+                    continue
+                raw_arguments = (process / "cmdline").read_bytes().split(b"\0")
+                arguments = [os.fsdecode(item) for item in raw_arguments if item]
+            except (OSError, UnicodeError):
+                continue
+            if not arguments or Path(arguments[0]).name != "calibre-server":
+                continue
+            if any(
+                argument == "--enable-auth"
+                or argument.startswith("--enable-auth=") and argument.split("=", 1)[1].lower() not in {"0", "false", "no"}
+                for argument in arguments
+            ):
+                continue
+            if not any(cls.same_path(argument, library) for argument in arguments if not argument.startswith("-")):
+                continue
+            host = cls.command_option(arguments, "--listen-on", "127.0.0.1")
+            if host in {"0.0.0.0", "::", "[::]"}:
+                host = "127.0.0.1"
+            if ":" in host and not host.startswith("["):
+                host = f"[{host}]"
+            port = cls.command_option(arguments, "--port", "8080")
+            if not port.isdigit() or not 1 <= int(port) <= 65535:
+                continue
+            prefix = cls.command_option(arguments, "--url-prefix", "").strip("/")
+            scheme = "https" if any(
+                argument == "--ssl-certfile" or argument.startswith("--ssl-certfile=")
+                for argument in arguments
+            ) else "http"
+            server = f"{scheme}://{host}:{port}"
+            if prefix:
+                server = f"{server}/{prefix}"
+            if server not in servers:
+                servers.append(server)
+        return servers
+
+    @staticmethod
+    def command_option(arguments: list[str], name: str, default: str) -> str:
+        for index, argument in enumerate(arguments):
+            if argument == name and index + 1 < len(arguments):
+                return arguments[index + 1]
+            if argument.startswith(f"{name}="):
+                return argument.split("=", 1)[1]
+        return default
+
+    @staticmethod
+    def same_path(value: str, expected: Path) -> bool:
+        try:
+            return Path(value).expanduser().resolve() == expected
+        except (OSError, RuntimeError):
+            return False
+
+    @staticmethod
+    def match_content_server_library(library: Path, output: str) -> str | None:
+        library_ids = [line.strip() for line in output.splitlines() if line.strip()]
+        if len(library_ids) == 1:
+            return library_ids[0]
+        expected = re.sub(r"[^0-9a-z]+", "_", library.name.casefold()).strip("_")
+        matches = [
+            library_id
+            for library_id in library_ids
+            if re.sub(r"[^0-9a-z]+", "_", library_id.casefold()).strip("_") == expected
+        ]
+        return matches[0] if len(matches) == 1 else None
 
     @staticmethod
     def acquire_calibredb_lock(context: OperationContext | None) -> int:

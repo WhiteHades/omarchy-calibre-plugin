@@ -41,7 +41,7 @@ Each request emits `accepted`, optional `progress`, then one of `succeeded`, `fa
 
 The public command adapter uses `calibredb`, `ebook-convert`, `fetch-ebook-metadata`, and `ebook-device`. It is the default adapter and the only mutation adapter.
 
-The runtime helper runs in an isolated `calibre-debug` process. It is read-only and limited to dynamic conversion descriptors that do not have a stable machine-readable command. The bridge disables this capability when the installed version is incompatible.
+The runtime helper runs in an isolated, read-only `calibre-debug` process. It reports dynamic conversion descriptors and resolves local asset paths that Content Server responses omit. The bridge disables these capabilities when the installed version is incompatible.
 
 Tests use stub command and temporary filesystem adapters. Contract tests also run the public command adapter against a disposable Calibre library.
 

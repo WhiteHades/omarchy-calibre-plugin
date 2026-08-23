@@ -5,12 +5,40 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from backend.calibre_bridge import BridgeError, CalibreBridge
 
 
 class CalibreCommandLockTest(unittest.TestCase):
+    def test_busy_local_library_uses_matching_content_server(self) -> None:
+        library = Path("/tmp/Real Library")
+        local = ["calibredb", "list", "--with-library", str(library)]
+        server = "http://127.0.0.1:54321"
+        remote = f"{server}/#Real_Library"
+        success = Mock(stdout="")
+        bridge = CalibreBridge()
+
+        with (
+            patch.object(bridge, "acquire_calibredb_lock", return_value=None),
+            patch.object(bridge, "local_content_servers", return_value=[server]),
+            patch.object(
+                bridge,
+                "run_command",
+                side_effect=[
+                    BridgeError("calibre_busy", "busy"),
+                    Mock(stdout="Other_Library\nReal_Library\n"),
+                    success,
+                    success,
+                ],
+            ) as run_command,
+        ):
+            bridge.run(local)
+            bridge.run(local)
+
+        targets = [call.args[0][3] for call in run_command.call_args_list]
+        self.assertEqual(targets, [str(library), f"{server}/#-", remote, remote])
+
     def test_separate_bridges_do_not_overlap_calibredb_processes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
