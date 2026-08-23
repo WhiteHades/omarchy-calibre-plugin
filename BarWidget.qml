@@ -76,9 +76,12 @@ BarWidget {
     anchors.fill: parent
     bar: root.bar
     iconComponent: Component {
-      CalibreIcon {
-        anchors.fill: parent
-        iconSize: Math.min(width, height)
+      Item {
+        CalibreIcon {
+          anchors.centerIn: parent
+          iconSize: Style.space(12)
+          color: button.foreground
+        }
       }
     }
     tooltipText: "Calibre"

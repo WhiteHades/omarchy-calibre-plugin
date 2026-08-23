@@ -83,6 +83,22 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("CalibreIcon {", panel)
         self.assertNotIn("󰂺", widget + panel)
 
+    def test_bar_icon_uses_native_optical_size_and_theme_color(self) -> None:
+        component = (ROOT / "CalibreIcon.qml").read_text()
+        widget = (ROOT / "BarWidget.qml").read_text()
+
+        self.assertIn("property color color:", component)
+        self.assertIn("color: root.color", component)
+        self.assertIn("maskSource: sourceImage", component)
+        self.assertIn("iconSize: Style.space(12)", widget)
+        self.assertIn("color: button.foreground", widget)
+
+    def test_icon_decodes_at_the_display_pixel_ratio(self) -> None:
+        component = (ROOT / "CalibreIcon.qml").read_text()
+
+        self.assertIn("Screen.devicePixelRatio", component)
+        self.assertNotIn("width * 2", component)
+
     def test_release_files_cover_installation_security_and_preview(self) -> None:
         for name in ("README.md", "CHANGELOG.md", "CONTRIBUTING.md", "SECURITY.md", "preview.png"):
             self.assertTrue((ROOT / name).is_file(), name)
