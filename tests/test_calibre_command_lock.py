@@ -39,6 +39,47 @@ class CalibreCommandLockTest(unittest.TestCase):
         targets = [call.args[0][3] for call in run_command.call_args_list]
         self.assertEqual(targets, [str(library), f"{server}/#-", remote, remote])
 
+    def test_busy_write_does_not_use_a_cached_read_only_server(self) -> None:
+        library = Path("/tmp/Real Library")
+        read = ["calibredb", "list", "--with-library", str(library)]
+        write = ["calibredb", "add", "--with-library", str(library), "/tmp/book.pdf"]
+        server = "http://127.0.0.1:54321"
+        remote = f"{server}/#Real_Library"
+        bridge = CalibreBridge()
+
+        with (
+            patch.object(bridge, "acquire_calibredb_lock", return_value=None),
+            patch.object(bridge, "local_content_servers", return_value=[server]),
+            patch.object(
+                bridge,
+                "run_command",
+                side_effect=[
+                    BridgeError("calibre_busy", "busy"),
+                    Mock(stdout="Real_Library\n"),
+                    Mock(stdout="[]"),
+                    BridgeError("calibre_busy", "busy"),
+                ],
+            ) as run_command,
+        ):
+            bridge.run(read)
+            with self.assertRaises(BridgeError) as raised:
+                bridge.run(write, commit=True)
+
+        self.assertEqual(raised.exception.code, "calibre_busy")
+        self.assertEqual(
+            raised.exception.message,
+            "The running Calibre Content server is read-only. Stop it, then retry",
+        )
+        self.assertEqual(
+            [call.args[0] for call in run_command.call_args_list],
+            [
+                read,
+                ["calibredb", "list", "--with-library", f"{server}/#-"],
+                ["calibredb", "list", "--with-library", remote],
+                write,
+            ],
+        )
+
     def test_separate_bridges_do_not_overlap_calibredb_processes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -320,6 +320,8 @@ class PluginContractTest(unittest.TestCase):
         self.assertIn("bookId: root.coverPickerContext.bookId", panel)
         self.assertIn("bookIds: [root.exportPickerContext.bookId]", panel)
         self.assertRegex(panel, r"function\s+launchFilePicker\s*\(")
+        self.assertRegex(panel, r"function\s+startQueuedFilePicker\s*\(")
+        self.assertIn("if (panel.visible || panel.backingWindowVisible)", panel)
         self.assertIn("filePickerDelay.restart()", panel)
         self.assertIn("root.controller.hide()", panel)
         self.assertIn("onExited: root.finishFilePicker", panel)

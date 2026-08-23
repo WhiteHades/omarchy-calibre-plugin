@@ -2728,7 +2728,11 @@ print(json.dumps(result, separators=(",", ":")))
         lock_file = self.acquire_calibredb_lock(active_context) if Path(command[0]).name == "calibredb" else None
         library = self.calibredb_library_path(command)
         with self._state_lock:
-            cached_target = self._content_server_targets.get(library) if library is not None else None
+            cached_target = (
+                self._content_server_targets.get(library)
+                if library is not None and not commit
+                else None
+            )
         try:
             if cached_target is not None:
                 try:
@@ -2759,6 +2763,14 @@ print(json.dumps(result, separators=(",", ":")))
                 )
             except BridgeError as error:
                 if error.code != "calibre_busy" or not check:
+                    raise
+                if commit:
+                    if library is not None and self.local_content_servers(library):
+                        raise BridgeError(
+                            "calibre_busy",
+                            "The running Calibre Content server is read-only. Stop it, then retry",
+                            retryable=True,
+                        ) from error
                     raise
                 fallback = self.content_server_command(command, active_context, cwd)
                 if fallback is None:

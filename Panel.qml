@@ -173,6 +173,21 @@ Panel {
     filePickerDelay.restart()
   }
 
+  function startQueuedFilePicker() {
+    var picker = queuedFilePicker
+    if (!picker) {
+      reopenAfterFilePicker = false
+      return
+    }
+    if (panel.visible || panel.backingWindowVisible) {
+      filePickerDelay.restart()
+      return
+    }
+    queuedFilePicker = null
+    activeFilePicker = picker
+    picker.running = true
+  }
+
   function finishFilePicker(picker) {
     if (activeFilePicker !== picker) return
     activeFilePicker = null
@@ -1372,18 +1387,9 @@ Panel {
 
   Timer {
     id: filePickerDelay
-    interval: 160
+    interval: 16
     repeat: false
-    onTriggered: {
-      var picker = root.queuedFilePicker
-      root.queuedFilePicker = null
-      if (!picker) {
-        root.reopenAfterFilePicker = false
-        return
-      }
-      root.activeFilePicker = picker
-      picker.running = true
-    }
+    onTriggered: root.startQueuedFilePicker()
   }
 
   Shortcut {
