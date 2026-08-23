@@ -155,23 +155,40 @@ Item {
 
       Popup {
         id: popup
-        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutsideParent
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
         x: 0
-        y: trigger.height + Style.spacing.xxs
+        y: 0
         width: trigger.width
-        implicitHeight: Math.min(root.options.length * root.popupRowHeight + Math.max(0, root.options.length - 1) * Style.spacing.labelGap + Style.spacing.xxs,
-                                 root.popupRowHeight * 8 + 7 * Style.spacing.labelGap + Style.spacing.xxs)
-        padding: Style.spacing.hairline
+        readonly property real menuHeight: Math.min(root.options.length * root.popupRowHeight + Math.max(0, root.options.length - 1) * Style.spacing.labelGap + Style.spacing.xxs,
+                                                    root.popupRowHeight * 8 + 7 * Style.spacing.labelGap + Style.spacing.xxs)
+        implicitHeight: trigger.height + Style.spacing.xxs + menuHeight
+        padding: 0
         leftPadding: Border.left(root.popupBorderSpec) + Style.spacing.hairline
         rightPadding: Border.right(root.popupBorderSpec) + Style.spacing.hairline
-        topPadding: Border.top(root.popupBorderSpec) + Style.spacing.hairline
+        topPadding: trigger.height + Style.spacing.xxs + Border.top(root.popupBorderSpec) + Style.spacing.hairline
         bottomPadding: Border.bottom(root.popupBorderSpec) + Style.spacing.hairline
         focus: true
 
-        background: BorderSurface {
-          color: root.background
-          borderSpec: root.popupBorderSpec
-          radius: Style.cornerRadius
+        background: Item {
+          MouseArea {
+            id: popupTrigger
+            width: parent.width
+            height: trigger.height
+            cursorShape: Qt.PointingHandCursor
+            onClicked: {
+              trigger.forceActiveFocus()
+              popup.close()
+            }
+          }
+
+          BorderSurface {
+            y: trigger.height + Style.spacing.xxs
+            width: parent.width
+            height: parent.height - y
+            color: root.background
+            borderSpec: root.popupBorderSpec
+            radius: Style.cornerRadius
+          }
         }
 
         onOpened: {

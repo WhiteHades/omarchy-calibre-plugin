@@ -274,7 +274,9 @@ class PluginContractTest(unittest.TestCase):
     def test_dropdown_trigger_is_inside_the_popup_close_boundary(self) -> None:
         dropdown = (ROOT / "CalibreDropdown.qml").read_text()
 
-        self.assertIn("Popup.CloseOnPressOutsideParent", dropdown)
+        self.assertRegex(dropdown, r"Popup\s*\{\s*id:\s*popup\s*closePolicy:[^\n]*CloseOnPressOutside\s*x:\s*0\s*y:\s*0")
+        self.assertRegex(dropdown, r"MouseArea\s*\{\s*id:\s*popupTrigger")
+        self.assertIn("height: trigger.height", dropdown)
 
     def test_panel_supports_the_documented_delete_key(self) -> None:
         panel = (ROOT / "Panel.qml").read_text()
