@@ -2,6 +2,15 @@
 
 All notable changes to this project are recorded here.
 
+## 0.1.1 - 2026-08-24
+
+### Fixed
+
+- Matched the Calibre icon to Omarchy's bar dimensions and active theme colors.
+- Removed duplicate libraries from the library selector and made it close reliably from its trigger.
+- Corrected panel focus, Escape dismissal, file-picker stacking, and hidden-scrollbar behavior.
+- Allowed library reads while a local Calibre Content server is running; writes ask you to stop the server and retry.
+
 ## 0.1.0 - 2026-08-22
 
 ### Added

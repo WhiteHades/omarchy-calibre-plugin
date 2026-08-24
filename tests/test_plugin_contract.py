@@ -16,7 +16,7 @@ class PluginContractTest(unittest.TestCase):
 
         self.assertEqual(manifest["schemaVersion"], 1)
         self.assertEqual(manifest["id"], "io.github.whitehades.calibre")
-        self.assertEqual(manifest["version"], "0.1.0")
+        self.assertEqual(manifest["version"], "0.1.1")
         self.assertEqual(manifest["license"], "MIT")
         self.assertEqual(manifest["kinds"], ["bar-widget"])
         self.assertEqual(manifest["entryPoints"], {"barWidget": "BarWidget.qml"})

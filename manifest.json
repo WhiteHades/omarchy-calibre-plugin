@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.whitehades.calibre",
   "name": "Calibre",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "WhiteHades",
   "license": "MIT",
   "description": "Manage a Calibre library from the Omarchy bar.",

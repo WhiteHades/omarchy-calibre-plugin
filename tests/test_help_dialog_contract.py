@@ -1,3 +1,4 @@
+import json
 import unittest
 from pathlib import Path
 
@@ -13,6 +14,11 @@ class HelpDialogContractTest(unittest.TestCase):
     def test_help_uses_native_components_and_calibre_identity(self) -> None:
         for component in ("BorderSurface {", "CalibreIcon {", "PanelSectionHeader {", "PanelSeparator {", "Button {"):
             self.assertIn(component, self.source)
+
+    def test_help_reports_the_manifest_version(self) -> None:
+        manifest = json.loads((ROOT / "manifest.json").read_text())
+
+        self.assertIn(f'Calibre {manifest["version"]}', self.source)
 
     def test_help_exposes_shortcuts_and_runtime_diagnostics(self) -> None:
         for prop in (

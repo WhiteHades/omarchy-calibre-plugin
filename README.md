@@ -15,6 +15,8 @@
 
 ![Calibre panel in Omarchy Quattro](preview.png)
 
+Preview book: [The little book about OS development](https://littleosbook.github.io/) by Erik Helin and Adam Renberg, licensed under [CC BY-NC-SA 3.0](https://creativecommons.org/licenses/by-nc-sa/3.0/us/).
+
 Calibre for Omarchy puts the everyday parts of Calibre in a native, keyboard-friendly panel. Browse, search, edit, convert, import, export, and send books to a connected reader without opening the Calibre desktop.
 
 ## Features

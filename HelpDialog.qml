@@ -41,7 +41,7 @@ BorderSurface {
   ]
 
   readonly property var diagnostics: [
-    { label: "Plugin", value: "Calibre 0.1.0" },
+    { label: "Plugin", value: "Calibre 0.1.1" },
     { label: "Calibre", value: calibreVersion || "Not detected" },
     { label: "Status", value: calibreStatus || "Unknown" },
     { label: "Library", value: libraryName || "None selected" },
